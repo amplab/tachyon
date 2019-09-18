@@ -11,7 +11,13 @@
 
 package alluxio.underfs;
 
-import org.junit.Assert;
+<<<<<<< HEAD
+import static org.junit.Assert.assertEquals;
+=======
+//import org.junit.Assert;
+import static org.junit.Assert.assertEquals;
+
+>>>>>>> 68971deea97b08034c4f636580515b83fc75d7f3
 import org.junit.Test;
 
 /**
@@ -26,12 +32,12 @@ public final class UfsDirectoryStatusTest {
     short mode = 077;
     UfsDirectoryStatus status = new UfsDirectoryStatus("name", "owner", "group", mode);
 
-    Assert.assertEquals("name", status.getName());
-    Assert.assertEquals(true, status.isDirectory());
-    Assert.assertEquals(false, status.isFile());
-    Assert.assertEquals("owner", status.getOwner());
-    Assert.assertEquals("group", status.getGroup());
-    Assert.assertEquals(mode, status.getMode());
+    assertEquals("name", status.getName());
+    assertEquals(true, status.isDirectory());
+    assertEquals(false, status.isFile());
+    assertEquals("owner", status.getOwner());
+    assertEquals("group", status.getGroup());
+    assertEquals(mode, status.getMode());
   }
 
   /**
@@ -43,6 +49,6 @@ public final class UfsDirectoryStatusTest {
     UfsDirectoryStatus statusToCopy =
         new UfsDirectoryStatus("name", "owner", "group", mode);
     UfsDirectoryStatus status = new UfsDirectoryStatus(statusToCopy);
-    Assert.assertEquals(statusToCopy, status);
+    assertEquals(statusToCopy, status);
   }
 }
