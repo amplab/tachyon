@@ -76,7 +76,7 @@ If Alluxio is deployed in a cluster, this file needs to be distributed to all th
 Then, start Alluxio, CSV files containing metrics will be found in the `sink.csv.directory`. The
 file name will correspond with the metric name.
 
-Refer to `metrics.properties.template` for all possible sink specific configurations. 
+Refer to `metrics.properties.template` for all possible sink specific configurations.
 
 ## Supported Metrics
 
@@ -126,3 +126,59 @@ to the under store.
 
 Tags are additional pieces of metadata for the metric such as user name or under storage location.
 Tags can be used to further filter or aggregate on various characteristics.
+
+## Setting up Grafana for Alluxio
+
+Grafana is a metics analytics and visualization software used for visualizing time series
+data. You can use Grafana to better visualize the various metrics that Alluxio collects. The software
+allows users to more easily see changes in memory, storage, and completed operations in Alluxio.
+
+Grafana itself does not collect metrics, so a monitoring tool must be set up for Grafana to pull metrics from.
+Alluxio and Grafana both support exporting and pulling metrics from `Graphite`.
+
+### Setting up Graphite
+
+Install Graphite using the instructions [here](https://graphite.readthedocs.io/en/latest/install.html).
+
+Graphite has a simple configuration with Alluxio. With this setup, Alluxio pushes all metrics in the
+master and worker `/metrics/json` endpoints to Graphite. That being said Graphite has to be setup as a sink in
+Alluxio, so in `${ALLUXIO_HOME}/conf/metrics.properties` add the following:
+
+```
+alluxio.metrics.sink.graphite.class=alluxio.metrics.sink.GraphiteSink
+alluxio.metrics.sink.graphite.host=graphite
+alluxio.metrics.sink.graphite.port=2003
+alluxio.metrics.sink.graphite.period=10
+```
+
+Save the file and restart Alluxio, and metrics will be visible in Graphite's webUI.
+
+### Grafana
+
+Install Grafana using the instructions [here](https://grafana.com/docs/installation/).
+
+Once Grafana is installed and running you can go to [http://localhost:3000](http://localhost:3000) to open Grafana's webUI.
+The default login for Grafana is username: `admin` and password: `admin`. After the webUI is opened a datasource needs to be added.
+The datasource will be the monitoring software that was set up earlier.
+
+Adding Graphite as a datasource in Grafana is simple and requires a few steps since it is a supported datasource in Grafana.
+First enter the `HTTP url` as the URL used to access Graphite's webUI. By default this will be `http://localhost`. Next set
+the `HTTP Access` to `Browser`. Finally set `Version` under `Graphite Details` to your version of Graphite. This controls what
+functions are available when making queries.
+
+Grafana will now be set up and connected to Alluxio. You can create queries to visualize any of the
+metrics that Alluxio collects. For a guide on using Grafana read the docs [here](https://grafana.com/docs/v4.3/guides/getting_started).
+
+### Querying
+
+With Graphite configured with Alluxio and also linked to Grafana, queries can be created in a Grafana dashboard to
+display Alluxio's metrics. Querying Graphite is very similar to navigating a file path, and is user friendly.
+For help on creating graphite queries check [here](https://grafana.com/docs/features/datasources/graphite/).
+
+Graphite queries also have a wildcard label (annotated with the `*` icon). When used, the wildcard label will display all
+possible metrics on the Grafana panel. This allows for easy aggregation of multiple metrics, and there are also functions which
+allow metrics to be combined, calculated, filtered, and sorted. when combined with the wildcard label, metrics can be manipulated
+in various ways.
+
+An example Grafana template for Alluxio's metrics can be found in `/alluxio/integration/grafana`. This template displays
+the majority of Alluxio's metrics while only scratching the surface of Graphite and Grafana's capabilities.
