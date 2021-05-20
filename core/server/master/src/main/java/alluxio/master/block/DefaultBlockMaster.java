@@ -86,6 +86,8 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.UnknownHostException;
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -821,7 +823,14 @@ public final class DefaultBlockMaster extends CoreMaster implements BlockMaster 
         continue;
       }
 
+      Instant waitWorkerBlock = Instant.now();
       synchronized (worker) {
+        Instant inWorkerBlock = Instant.now();
+        Duration waitTime = Duration.between(waitWorkerBlock, inWorkerBlock);
+        if (waitTime.compareTo(Duration.ofMillis(1)) > 0) {
+          LOG.warn("Wait time {}ms to enter the registerWorkerInternal synchronized section", waitTime.toMillis());
+        }
+
         worker.updateLastUpdatedTimeMs();
         mWorkers.add(worker);
         workers.remove(worker);
@@ -888,7 +897,16 @@ public final class DefaultBlockMaster extends CoreMaster implements BlockMaster 
       blocks.addAll(blockIds);
     }
 
+    Instant waitWorkerBlock = Instant.now();
+    // This synchronized section is guarding two workers registering with the same NetAddress
+    // This should happen with a very low possibility
+    // And should not be the performance bottleneck
     synchronized (worker) {
+      Instant inWorkerBlock = Instant.now();
+      Duration waitTime = Duration.between(waitWorkerBlock, inWorkerBlock);
+      if (waitTime.compareTo(Duration.ofMillis(1)) > 0) {
+        LOG.warn("Wait time {}ms to enter the workerRegister synchronized section", waitTime.toMillis());
+      }
       worker.updateLastUpdatedTimeMs();
       // Detect any lost blocks on this worker.
       Set<Long> removedBlocks = worker.register(mGlobalStorageTierAssoc, storageTiers,
@@ -993,19 +1011,36 @@ public final class DefaultBlockMaster extends CoreMaster implements BlockMaster 
       for (long blockId : entry.getValue()) {
         try (LockResource lr = lockBlock(blockId)) {
           Optional<BlockMeta> block = mBlockStore.getBlock(blockId);
+//          if (block.isPresent()) {
+//            workerInfo.addBlock(blockId);
+//            BlockLocation blockLocation = BlockLocation.newBuilder()
+//                .setWorkerId(workerInfo.getId())
+//                .setTier(entry.getKey().getTier())
+//                .setMediumType(entry.getKey().getMediumType())
+//                .build();
+//            mBlockStore.addLocation(blockId, blockLocation);
+//            mLostBlocks.remove(blockId);
+//          } else {
+//            LOG.warn("Invalid block: {} from worker {}.", blockId,
+//                workerInfo.getWorkerAddress().getHost());
+//          }
+
           if (block.isPresent()) {
-            workerInfo.addBlock(blockId);
-            BlockLocation blockLocation = BlockLocation.newBuilder()
-                .setWorkerId(workerInfo.getId())
-                .setTier(entry.getKey().getTier())
-                .setMediumType(entry.getKey().getMediumType())
-                .build();
-            mBlockStore.addLocation(blockId, blockLocation);
-            mLostBlocks.remove(blockId);
+            // Skip
           } else {
-            LOG.warn("Invalid block: {} from worker {}.", blockId,
-                workerInfo.getWorkerAddress().getHost());
+            // Only for the test purpose, add this block to the block store
+            mBlockStore.putBlock(blockId, BlockMeta.newBuilder().setLength(67_108_864).build());
+//            LOG.warn("Invalid block: {} from worker {}.", blockId,
+//                workerInfo.getWorkerAddress().getHost());
           }
+          workerInfo.addBlock(blockId);
+          BlockLocation blockLocation = BlockLocation.newBuilder()
+                  .setWorkerId(workerInfo.getId())
+                  .setTier(entry.getKey().getTier())
+                  .setMediumType(entry.getKey().getMediumType())
+                  .build();
+          mBlockStore.addLocation(blockId, blockLocation);
+          mLostBlocks.remove(blockId);
         }
       }
     }
@@ -1023,8 +1058,10 @@ public final class DefaultBlockMaster extends CoreMaster implements BlockMaster 
   }
 
   @Override
+  // TODO(jiacheng): change this to unmodifiableSet?
   public Set<Long> getLostBlocks() {
     return ImmutableSet.copyOf(mLostBlocks);
+//    return Collections.unmodifiableSet(mLostBlocks);
   }
 
   /**
@@ -1140,6 +1177,7 @@ public final class DefaultBlockMaster extends CoreMaster implements BlockMaster 
   }
 
   private LockResource lockBlock(long blockId) {
+    // TODO(jiacheng): when will this be bottleneck?
     return new LockResource(mBlockLocks.get(blockId));
   }
 

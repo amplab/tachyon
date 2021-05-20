@@ -22,6 +22,7 @@ import alluxio.grpc.CommitBlockPResponse;
 import alluxio.grpc.GetWorkerIdPRequest;
 import alluxio.grpc.GetWorkerIdPResponse;
 import alluxio.grpc.GrpcUtils;
+import alluxio.grpc.LocationBlockIdListEntry;
 import alluxio.grpc.RegisterWorkerPOptions;
 import alluxio.grpc.RegisterWorkerPRequest;
 import alluxio.grpc.RegisterWorkerPResponse;
@@ -29,6 +30,7 @@ import alluxio.grpc.StorageList;
 import alluxio.metrics.Metric;
 import alluxio.proto.meta.Block;
 
+import alluxio.worker.block.BlockStoreLocation;
 import com.google.common.base.Preconditions;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
@@ -62,10 +64,11 @@ public final class BlockMasterWorkerServiceHandler extends
   public void blockHeartbeat(BlockHeartbeatPRequest request,
       StreamObserver<BlockHeartbeatPResponse> responseObserver) {
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Block heartbeat request is {} bytes, {} added blocks and {} removed blocks",
+      LOG.debug("blockHeartbeat request is {} bytes, {} added blocks, {} removed blocks and {} metrics",
               request.getSerializedSize(),
               request.getAddedBlocksCount(),
-              request.getRemovedBlockIdsCount());
+              request.getRemovedBlockIdsCount(),
+              request.getOptions().getMetricsCount());
     }
 
     final long workerId = request.getWorkerId();
@@ -103,7 +106,10 @@ public final class BlockMasterWorkerServiceHandler extends
   @Override
   public void commitBlock(CommitBlockPRequest request,
       StreamObserver<CommitBlockPResponse> responseObserver) {
-
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("commitBlock request is {} bytes",
+              request.getSerializedSize());
+    }
     final long workerId = request.getWorkerId();
     final long usedBytesOnTier = request.getUsedBytesOnTier();
     final String tierAlias = request.getTierAlias();
@@ -121,7 +127,10 @@ public final class BlockMasterWorkerServiceHandler extends
   @Override
   public void commitBlockInUfs(CommitBlockInUfsPRequest request,
       StreamObserver<CommitBlockInUfsPResponse> responseObserver) {
-
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("commitBlockInUfs request is {} bytes",
+              request.getSerializedSize());
+    }
     RpcUtils.call(LOG,
         (RpcUtils.RpcCallableThrowsIOException<CommitBlockInUfsPResponse>) () -> {
           mBlockMaster.commitBlockInUFS(request.getBlockId(), request.getLength());
@@ -132,6 +141,10 @@ public final class BlockMasterWorkerServiceHandler extends
   @Override
   public void getWorkerId(GetWorkerIdPRequest request,
       StreamObserver<GetWorkerIdPResponse> responseObserver) {
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("getWorkerId request is {} bytes",
+              request.getSerializedSize());
+    }
     RpcUtils.call(LOG, (RpcUtils.RpcCallableThrowsIOException<GetWorkerIdPResponse>) () -> {
       return GetWorkerIdPResponse.newBuilder()
           .setWorkerId(mBlockMaster.getWorkerId(GrpcUtils.fromProto(request.getWorkerNetAddress())))
@@ -142,12 +155,6 @@ public final class BlockMasterWorkerServiceHandler extends
   @Override
   public void registerWorker(RegisterWorkerPRequest request,
       StreamObserver<RegisterWorkerPResponse> responseObserver) {
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Register worker request is {} bytes, containing {} blocks",
-              request.getSerializedSize(),
-              request.getCurrentBlocksCount());
-    }
-
     final long workerId = request.getWorkerId();
     final List<String> storageTiers = request.getStorageTiersList();
     final Map<String, Long> totalBytesOnTiers = request.getTotalBytesOnTiersMap();
@@ -166,8 +173,20 @@ public final class BlockMasterWorkerServiceHandler extends
                     (e1, e2) -> {
                       List<Long> e3 = new ArrayList<>(e1);
                       e3.addAll(e2);
+                      LOG.info("Merging two lists of {} and {}", e1.size(), e2.size());
+
                       return e3;
                     }));
+
+    if (LOG.isDebugEnabled()) {
+      StringBuilder sb = new StringBuilder();
+      for (Map.Entry<Block.BlockLocation, List<Long>> e : currBlocksOnLocationMap.entrySet()) {
+        sb.append(String.format("[location: %s, blockCount: %s], ", e.getKey(), e.getValue().size()));
+      }
+      LOG.debug("registerWorker request is {} bytes, Locations: [{}]",
+              request.getSerializedSize(),
+              sb.toString());
+    }
 
     RegisterWorkerPOptions options = request.getOptions();
     RpcUtils.call(LOG,

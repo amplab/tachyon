@@ -21,13 +21,17 @@ import alluxio.grpc.BlockMasterWorkerServiceGrpc;
 import alluxio.grpc.BlockStoreLocationProto;
 import alluxio.grpc.Command;
 import alluxio.grpc.CommitBlockInUfsPRequest;
+import alluxio.grpc.CommitBlockInUfsPResponse;
 import alluxio.grpc.CommitBlockPRequest;
+import alluxio.grpc.CommitBlockPResponse;
 import alluxio.grpc.ConfigProperty;
 import alluxio.grpc.GetWorkerIdPRequest;
+import alluxio.grpc.GetWorkerIdPResponse;
 import alluxio.grpc.LocationBlockIdListEntry;
 import alluxio.grpc.Metric;
 import alluxio.grpc.RegisterWorkerPOptions;
 import alluxio.grpc.RegisterWorkerPRequest;
+import alluxio.grpc.RegisterWorkerPResponse;
 import alluxio.grpc.ServiceType;
 import alluxio.grpc.StorageList;
 import alluxio.master.MasterClientContext;
@@ -38,6 +42,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -102,7 +108,11 @@ public class BlockMasterClient extends AbstractMasterClient {
           CommitBlockPRequest.newBuilder().setWorkerId(workerId).setUsedBytesOnTier(usedBytesOnTier)
               .setTierAlias(tierAlias).setMediumType(mediumType)
               .setBlockId(blockId).setLength(length).build();
-      mClient.commitBlock(request);
+      CommitBlockPResponse response = mClient.commitBlock(request);
+      if (LOG.isDebugEnabled()) {
+        LOG.info("commitBlock response is {} bytes",
+                response.getSerializedSize());
+      }
       return null;
     }, LOG, "CommitBlock",
         "workerId=%d,usedBytesOnTier=%d,tierAlias=%s,mediumType=%s,blockId=%d,length=%d",
@@ -120,7 +130,11 @@ public class BlockMasterClient extends AbstractMasterClient {
     retryRPC(() -> {
       CommitBlockInUfsPRequest request =
           CommitBlockInUfsPRequest.newBuilder().setBlockId(blockId).setLength(length).build();
-      mClient.commitBlockInUfs(request);
+      CommitBlockInUfsPResponse response = mClient.commitBlockInUfs(request);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("commitBlockInUfs response is {} bytes",
+                response.getSerializedSize());
+      }
       return null;
     }, LOG, "CommitBlockInUfs", "blockId=%d,length=%d", blockId, length);
   }
@@ -135,12 +149,18 @@ public class BlockMasterClient extends AbstractMasterClient {
     return retryRPC(() -> {
       GetWorkerIdPRequest request =
           GetWorkerIdPRequest.newBuilder().setWorkerNetAddress(GrpcUtils.toProto(address)).build();
-      return mClient.getWorkerId(request).getWorkerId();
+      GetWorkerIdPResponse response = mClient.getWorkerId(request);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("getWorkerId response is {} bytes",
+                response.getSerializedSize());
+      }
+      return response.getWorkerId();
     }, LOG, "GetId", "address=%s", address);
   }
 
-  private List<LocationBlockIdListEntry> convertBlockListMapToProto(
+  public List<LocationBlockIdListEntry> convertBlockListMapToProto(
       Map<BlockStoreLocation, List<Long>> blockListOnLocation) {
+    LOG.info("BlockMasterClient is running the conversion, the mocking didnt work.");
     final List<LocationBlockIdListEntry> entryList = new ArrayList<>();
     for (Map.Entry<BlockStoreLocation, List<Long>> entry : blockListOnLocation.entrySet()) {
       BlockStoreLocation loc = entry.getKey();
@@ -189,9 +209,16 @@ public class BlockMasterClient extends AbstractMasterClient {
         .addAllAddedBlocks(entryList).setOptions(options)
         .putAllLostStorage(lostStorageMap).build();
 
-    return retryRPC(() -> mClient.withDeadlineAfter(mContext.getClusterConf()
-        .getMs(PropertyKey.WORKER_MASTER_PERIODICAL_RPC_TIMEOUT), TimeUnit.MILLISECONDS)
-        .blockHeartbeat(request).getCommand(), LOG, "Heartbeat", "workerId=%d", workerId);
+    return retryRPC(() -> {
+      Command command = mClient.withDeadlineAfter(mContext.getClusterConf()
+          .getMs(PropertyKey.WORKER_MASTER_PERIODICAL_RPC_TIMEOUT), TimeUnit.MILLISECONDS)
+          .blockHeartbeat(request).getCommand();
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("heartbeat command is {} bytes, data count {}", command.getSerializedSize(),
+            command.getDataCount());
+      }
+      return command;
+    }, LOG, "Heartbeat", "workerId=%d", workerId);
   }
 
   /**
@@ -230,7 +257,14 @@ public class BlockMasterClient extends AbstractMasterClient {
         .setOptions(options).build();
 
     retryRPC(() -> {
-      mClient.registerWorker(request);
+      Instant s = Instant.now();
+      RegisterWorkerPResponse response = mClient.registerWorker(request);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("registerWorker response is {} bytes",
+                response.getSerializedSize());
+      }
+      Instant e = Instant.now();
+      LOG.info("{} elapsed before receiving the response", Duration.between(s, e).toMillis());
       return null;
     }, LOG, "Register", "workerId=%d", workerId);
   }

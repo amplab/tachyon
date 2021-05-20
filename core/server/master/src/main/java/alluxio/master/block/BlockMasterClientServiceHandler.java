@@ -62,6 +62,11 @@ public final class BlockMasterClientServiceHandler
   @Override
   public void getBlockInfo(GetBlockInfoPRequest request,
       StreamObserver<GetBlockInfoPResponse> responseObserver) {
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("getBlockInfo request is {} bytes",
+              request.getSerializedSize());
+    }
+
     long blockId = request.getBlockId();
     GetBlockInfoPOptions options = request.getOptions();
     RpcUtils.call(LOG,

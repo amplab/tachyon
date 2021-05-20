@@ -15,9 +15,11 @@ import alluxio.AbstractMasterClient;
 import alluxio.Constants;
 import alluxio.grpc.JobCommand;
 import alluxio.grpc.JobHeartbeatPRequest;
+import alluxio.grpc.JobHeartbeatPResponse;
 import alluxio.grpc.JobInfo;
 import alluxio.grpc.JobMasterWorkerServiceGrpc;
 import alluxio.grpc.RegisterJobWorkerPRequest;
+import alluxio.grpc.RegisterJobWorkerPResponse;
 import alluxio.grpc.ServiceType;
 import alluxio.grpc.GrpcUtils;
 import alluxio.job.wire.JobWorkerHealth;
@@ -72,18 +74,29 @@ public final class RetryHandlingJobMasterClient extends AbstractMasterClient
 
   @Override
   public long registerWorker(final WorkerNetAddress address) throws IOException {
-    return retryRPC(() -> mClient.registerJobWorker(RegisterJobWorkerPRequest.newBuilder()
-            .setWorkerNetAddress(GrpcUtils.toProto(address)).build()).getId(),
-        RPC_LOG, "RegisterWorker", "address=%s", address);
+    return retryRPC(() -> {
+      RegisterJobWorkerPResponse response =
+          mClient.registerJobWorker(RegisterJobWorkerPRequest.newBuilder()
+          .setWorkerNetAddress(GrpcUtils.toProto(address)).build());
+      if (RPC_LOG.isDebugEnabled()) {
+        RPC_LOG.debug("registerJobWorker response has {} bytes", response.getSerializedSize());
+      }
+      return response.getId();
+    }, RPC_LOG, "RegisterWorker", "address=%s", address);
   }
 
   @Override
   public List<JobCommand> heartbeat(final JobWorkerHealth jobWorkerHealth,
       final List<JobInfo> taskInfoList) throws IOException {
-    return retryRPC(() ->
-        mClient.heartbeat(JobHeartbeatPRequest.newBuilder()
-            .setJobWorkerHealth(jobWorkerHealth.toProto()).addAllTaskInfos(taskInfoList).build())
-            .getCommandsList(),
-        RPC_LOG, "Heartbeat", "jobWorkerHealth=%s,taskInfoList=%s", jobWorkerHealth, taskInfoList);
+    return retryRPC(() -> {
+      JobHeartbeatPResponse response = mClient.heartbeat(JobHeartbeatPRequest.newBuilder()
+          .setJobWorkerHealth(jobWorkerHealth.toProto()).addAllTaskInfos(taskInfoList).build());
+      if (RPC_LOG.isDebugEnabled()) {
+        RPC_LOG.debug("jobHeartbeat response has {} bytes, {} commands",
+            response.getSerializedSize(), response.getCommandsCount());
+      }
+      return response.getCommandsList();
+    }, RPC_LOG, "Heartbeat", "jobWorkerHealth=%s,taskInfoList=%s",
+        jobWorkerHealth, taskInfoList);
   }
 }
