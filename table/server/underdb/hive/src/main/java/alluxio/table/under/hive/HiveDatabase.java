@@ -160,7 +160,8 @@ public class HiveDatabase implements UnderDatabase {
    */
   private void mount(UdbInExClusionSpec bypassSpec) throws IOException {
     List<String> tableNames = getTableNames().stream()
-        .filter(bypassSpec::hasIgnoredTable) // ignored tables should not be mounted
+        // ignored tables should not be mounted
+        .filter((tableName) -> !bypassSpec.hasIgnoredTable(tableName))
         .collect(Collectors.toList());
     Map<Table, List<Partition>> tables = new HashMap<>(tableNames.size());
     for (String tableName : tableNames) {
