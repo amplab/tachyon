@@ -647,6 +647,11 @@ public final class MetricKey implements Comparable<MetricKey> {
               + "Use this metric to monitor when your master boot-up time is high。")
           .setMetricType(MetricType.GAUGE)
           .build();
+  public static final MetricKey MASTER_UFS_METADATA_LOAD =
+      new Builder("Master.UfsMetadataLoad")
+          .setDescription("Total number of loading ufs metadata")
+          .setMetricType(MetricType.COUNTER)
+          .build();
 
   // Cluster metrics
   public static final MetricKey CLUSTER_ACTIVE_RPC_READ_COUNT =
