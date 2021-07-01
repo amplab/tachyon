@@ -56,6 +56,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 /**
@@ -74,7 +75,7 @@ public class HiveDatabase implements UnderDatabase {
   private final String mHiveDbName;
   /** path translator that records mappings between ufs paths and Alluxio paths. */
   private final PathTranslator mPathTranslator;
-  private boolean mIsMounted;
+  private final AtomicBoolean mIsMounted;
 
   private static final HiveClientPoolCache CLIENT_POOL_CACHE = new HiveClientPoolCache();
   /** Hive client is not thread-safe, so use a client pool for concurrency. */
@@ -88,7 +89,7 @@ public class HiveDatabase implements UnderDatabase {
     mHiveDbName = hiveDbName;
     mClientPool = CLIENT_POOL_CACHE.getPool(connectionUri);
     mPathTranslator = new PathTranslator();
-    mIsMounted = false;
+    mIsMounted = new AtomicBoolean(false);
   }
 
   /**
@@ -314,10 +315,9 @@ public class HiveDatabase implements UnderDatabase {
         }
       }
 
-      if (!mIsMounted) {
+      if (mIsMounted.compareAndSet(false, true)) {
         // TODO(bowen): bypass spec updates are ignored
         mount(bypassSpec);
-        mIsMounted = true;
       }
       List<ColumnStatisticsInfo> colStats =
           columnStats.stream().map(HiveUtils::toProto).collect(Collectors.toList());
