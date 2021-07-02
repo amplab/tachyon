@@ -753,7 +753,7 @@ public class InodeSyncStream {
         return;
       }
 
-      Metrics.UFS_METADATA_LOAD.inc();
+      Metrics.UFS_METADATA_ACCESS.inc();
 
       if (context.getUfsStatus().isFile()) {
         loadFileMetadataInternal(mRpcContext, inodePath, resolution, context, mFsMaster);
@@ -1046,8 +1046,8 @@ public class InodeSyncStream {
    * {@link alluxio.web.WebInterfaceAbstractMetricsServlet}.
    */
   public static final class Metrics {
-    private static final Counter UFS_METADATA_LOAD =
-        MetricsSystem.counter(MetricKey.MASTER_UFS_METADATA_LOAD.getName());
+    private static final Counter UFS_METADATA_ACCESS =
+        MetricsSystem.counter(MetricKey.MASTER_UFS_METADATA_ACCESS_COUNT.getName());
 
     private Metrics() {} // prevent instantiation
   }
