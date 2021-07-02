@@ -845,6 +845,10 @@ logserver:
 ```
 
 For a production environment, you should always persist the logs with a Persistent Volume.
+When you specify the `logserver.volumeType` to be `persistentVolumeClaim`, 
+the Helm Chart will create a PVC.
+If you are not using dynamic provisioning for PVs, you will need to manually create the PV.
+Remember to make sure the selectors for PVC and PV match with each other.
 ```properties
 logserver:
   enabled: true
@@ -856,20 +860,22 @@ logserver:
   accessModes:
     - ReadWriteOnce
   storageClass: standard
-  selector:
-    matchLabels:
-      role: alluxio-logserver
-      # If you need, you can specify more selectors like below to provide better separation
-      # app: alluxio
-      # chart: alluxio-<chart version>
-      # release: alluxio
-      # heritage: Helm
-      # dc: data-center-1
-      # region: us-east
   # If you are dynamically provisioning PVs, the selector on the PVC should be empty.
   # Ref: https://kubernetes.io/docs/concepts/storage/persistent-volumes/#class-1
+  selector: {}
+  # If you are manually allocating PV for the logserver,
+  # it is recommended to use selectors to make sure the PV and PVC match as expected.
+  # You can specify selectors like below:
   # Example:
-  # selector: {}
+  # selector:
+  #   matchLabels:
+  #     role: alluxio-logserver
+  #     app: alluxio
+  #     chart: alluxio-<chart version>
+  #     release: alluxio
+  #     heritage: Helm
+  #     dc: data-center-1
+  #     region: us-east
 ```
 
 **Step 2: Helm install with the updated configuration**
@@ -951,15 +957,29 @@ spec:
   accessModes:
     - ReadWriteOnce
   # If you are using dynamic provisioning, leave the selector empty.
-  selector:
-    matchLabels:
-      role: alluxio-logserver
+  selector: {}
+  # If you are manually allocating PV for the logserver,
+  # it is recommended to use selectors to make sure the PV and PVC match as expected.
+  # You can specify selectors like below:
+  # Example:
+  # selector:
+  #   matchLabels:
+  #     role: alluxio-logserver
+  #     app: alluxio
+  #     chart: alluxio-<chart version>
+  #     release: alluxio
+  #     heritage: Helm
+  #     dc: data-center-1
+  #     region: us-east
 ```
 
 Create the PVC when you are ready.
 ```console
 $ kubectl create -f alluxio-logserver-pvc.yaml
 ```
+
+(Optional) If you are not using dynamic provisioning, you need to prepare the PV yourself.
+Remember to make sure the selectors on the PVC and PV match with each other.
 
 After you configure the volume in the Deployment, you can go ahead to create it.
 ```console
@@ -1340,6 +1360,215 @@ You should set the property `alluxio.user.short.circuit.enabled` to `false` in y
 
 You should also manually remove the volume `alluxio-domain` from `volumes` of the Pod definition
 and `volumeMounts` of each container if existing.
+
+{% endnavtab %}
+{% endnavtabs %}
+
+### Kubernetes Configuration Options
+
+The following options are provided in our Helm chart as additional
+parameters for experienced Kubernetes users.
+
+#### ServiceAccounts
+
+[By default](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/#use-the-default-service-account-to-access-the-api-server)
+Kubernetes will assign the namespace's `default` ServiceAccount
+to new pods in a namespace. You may specify for Alluxio pods to use
+any existing ServiceAccounts you may have in your cluster through
+the following:
+
+{% navtabs serviceAccounts %}
+{% navtab helm %}
+
+You may specify a top-level Helm value `serviceAccount` which will
+apply to the Master, Worker, and FUSE pods in the chart.
+```properties
+serviceAccount: sa-alluxio
+```
+
+You can override the top-level Helm value by specifying a value
+for the specific component's `serviceAccount` like below:
+```properties
+master:
+  serviceAccount: sa-alluxio-master
+
+worker:
+  serviceAccount: sa-alluxio-worker
+```
+
+{% endnavtab %}
+{% navtab kubectl %}
+
+You may add a `serviceAccountName` field to any of the Alluxio Pod template
+specs to have the Pod run using the matching ServiceAccount. For example:
+```properties
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: alluxio-master
+spec:
+  template:
+    spec:
+      serviceAccountName: sa-alluxio
+```
+
+{% endnavtab %}
+{% endnavtabs %}
+
+#### Node Selectors & Tolerations
+
+Kubernetes provides many options to control the scheduling of pods
+onto nodes in the cluster. The most direct of which is a
+[node selector](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector).
+
+However, Kubernetes will avoid scheduling pods on any tainted nodes.
+To allow certain pods to schedule on such nodes, Kubernetes allows
+you to specify tolerations for those taints. See
+[the Kubernetes documentation on taints and tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)
+for more details.
+
+{% navtabs selectorsTolerations %}
+{% navtab helm %}
+
+You may specify a node selector in JSON as a top-level Helm value,
+`nodeSelector`, which will apply to all pods in the chart. Similarly,
+you may specify a list of tolerations in JSON as a top-level Helm value,
+`tolerations`, which will also apply to all pods in the chart.
+```properties
+nodeSelector: {"app": "alluxio"}
+
+tolerations: [ {"key": "env", "operator": "Equal", "value": "prod", "effect": "NoSchedule"} ]
+```
+
+You can **override** the top-level `nodeSelector` by specifying a value
+for the specific component's `nodeSelector`.
+```properties
+master:
+  nodeSelector: {"app": "alluxio-master"}
+
+worker:
+  nodeSelector: {"app": "alluxio-worker"}
+```
+
+You can **append** to the top-level `tolerations` by specifying a value
+for the specific component's `tolerations`.
+```properties
+logserver:
+  tolerations: [ {"key": "app", "operator": "Equal", "value": "logging", "effect": "NoSchedule"} ]
+```
+
+{% endnavtab %}
+{% navtab kubectl %}
+
+You may add `nodeSelector` and `tolerations` fields to any of the Alluxio Pod template
+specs. For example:
+```properties
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: alluxio-master
+spec:
+  template:
+    spec:
+      nodeSelector:
+        app: alluxio
+      tolerations:
+        - effect: NoSchedule
+          key: env
+          operator: Equal
+          value: prod
+```
+
+{% endnavtab %}
+{% endnavtabs %}
+
+#### Host Aliases
+
+If you wish to add or override hostname resolution in the pods,
+Kubernetes exposes the containers' `/etc/hosts` file via
+[host aliases](https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/).
+This can be particularly useful for providing hostname addresses
+for services not managed by Kubernetes, like HDFS.
+
+{% navtabs hostAliases %}
+{% navtab helm %}
+
+You may specify a top-level Helm value `hostAliases` which will
+apply to the Master and Worker pods in the chart.
+```properties
+hostAliases:
+- ip: "127.0.0.1"
+  hostnames:
+    - "foo.local"
+    - "bar.local"
+- ip: "10.1.2.3"
+  hostnames:
+    - "foo.remote"
+    - "bar.remote"
+```
+
+{% endnavtab %}
+{% navtab kubectl %}
+
+You may add the `hostAliases` field to any of the Alluxio Pod template
+specs. For example:
+```properties
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: alluxio-master
+spec:
+  template:
+    spec:
+      hostAliases:
+      - ip: "127.0.0.1"
+        hostnames:
+          - "foo.local"
+          - "bar.local"
+      - ip: "10.1.2.3"
+        hostnames:
+          - "foo.remote"
+          - "bar.local"
+```
+
+{% endnavtab %}
+{% endnavtabs %}
+
+#### Deployment Strategy
+
+[By default](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy)
+Kubernetes will use the 'RollingUpdate' deployment strategy to progressively
+upgrade Pods when changes are detected.
+
+{% navtabs deployStrategy %}
+{% navtab helm %}
+
+The Helm chart currently only supports `strategy` for the logging server deployment:
+```properties
+logserver:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 1
+```
+
+{% endnavtab %}
+{% navtab kubectl %}
+
+You may add a `strategy` field to any of the Alluxio Pod template
+specs to have the Pod run using the matching ServiceAccount. For example:
+```properties
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: alluxio-master
+spec:
+  template:
+    spec:
+      strategy:
+        type: Recreate
+```
 
 {% endnavtab %}
 {% endnavtabs %}

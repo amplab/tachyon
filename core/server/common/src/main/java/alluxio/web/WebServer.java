@@ -101,6 +101,7 @@ public abstract class WebServer {
       disableMethod(s);
     }
 
+    mServletContextHandler.addServlet(StacksServlet.class, "/stacks");
     HandlerList handlers = new HandlerList();
     handlers.setHandlers(new Handler[] {mServletContextHandler, new DefaultHandler()});
     mServer.setHandler(handlers);

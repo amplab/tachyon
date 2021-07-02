@@ -144,8 +144,8 @@ public class BufferCachingGrpcDataReader {
       mStream.send(mReadRequest.toBuilder().setOffsetReceived(mPosToRead).build());
     } catch (Exception e) {
       // nothing is done as the receipt is sent at best effort
-      LOG.debug("Failed to send receipt of data to worker {} for request {}: {}.", mAddress,
-          mReadRequest, e.getMessage());
+      LOG.debug("Failed to send receipt of data to worker {} for request {}", mAddress,
+          mReadRequest, e);
     }
     Preconditions.checkState(mPosToRead - mReadRequest.getOffset() <= mReadRequest.getLength());
     return buffer;
@@ -204,7 +204,7 @@ public class BufferCachingGrpcDataReader {
     AlluxioConfiguration alluxioConf = context.getClusterConf();
     int readerBufferSizeMessages = alluxioConf
         .getInt(PropertyKey.USER_STREAMING_READER_BUFFER_SIZE_MESSAGES);
-    long dataTimeoutMs = alluxioConf.getMs(PropertyKey.USER_STREAMING_DATA_TIMEOUT);
+    long dataTimeoutMs = alluxioConf.getMs(PropertyKey.USER_STREAMING_DATA_READ_TIMEOUT);
 
     CloseableResource<BlockWorkerClient> client = context.acquireBlockWorkerClient(address);
 

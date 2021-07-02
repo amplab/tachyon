@@ -40,7 +40,6 @@ public enum ExceptionMessage {
   BLOCK_SIZE_INVALID("Block size of {0} is invalid. Block size must be > 0 bytes."),
   CANNOT_REQUEST_SPACE("Not enough space left on worker {0} to store blockId {1,number,#}."),
   NO_SPACE_FOR_BLOCK_ON_WORKER("There is no worker with enough space for a new block of size {0}"),
-  NO_WORKER_AVAILABLE_ON_ADDRESS("No Alluxio worker available for address {0}"),
   NO_WORKER_AVAILABLE("No available Alluxio worker found"),
 
   // active sync
@@ -50,8 +49,6 @@ public enum ExceptionMessage {
   LOCK_ID_FOR_DIFFERENT_BLOCK("lockId {0,number,#} is for blockId {1,number,#}, not {2,number,#}"),
   LOCK_ID_FOR_DIFFERENT_SESSION(
       "lockId {0,number,#} is owned by sessionId {1,number,#} not {2,number,#}"),
-  LOCK_RECORD_NOT_FOUND_FOR_BLOCK_AND_SESSION(
-      "no lock is found for blockId {0,number,#} for sessionId {1,number,#}"),
   LOCK_RECORD_NOT_FOUND_FOR_LOCK_ID("lockId {0,number,#} has no lock record"),
   LOCK_NOT_RELEASED("lockId {0,number,#} is not released."),
   SESSION_NOT_CLOSED("session {0,number,#} is not closed."),
@@ -65,10 +62,6 @@ public enum ExceptionMessage {
 
   // instream/outstream
   FAILED_CACHE("Failed to cache: {0}"),
-  FAILED_CREATE("Failed to create {0}"),
-  FAILED_SEEK("Failed to seek to {0}"),
-  FAILED_SKIP("Failed to skip {0}"),
-  INSTREAM_CANNOT_SKIP("The underlying BlockInStream could not skip {0}"),
   READ_CLOSED_STREAM("Cannot read from a closed stream"),
 
   // meta master
@@ -90,16 +83,8 @@ public enum ExceptionMessage {
       "Failed to free {0,number,#} bytes space at location {1}"),
   NO_SPACE_FOR_BLOCK_ALLOCATION(
       "Failed to allocate {0,number,#} bytes on {1} to create blockId {2,number,#}"),
-  NO_SPACE_FOR_BLOCK_ALLOCATION_RETRIES_EXCEEDED(
-      "Failed to allocate {0,number,#} bytes on {1} after {2} attempts for blockId {3,number,#}"),
-  NO_SPACE_FOR_BLOCK_REQUEST_SPACE_TIMEOUT(
-      "Failed to request {0,number,#} bytes after {1}ms to create blockId {2,number,#}"),
-  NO_SPACE_FOR_BLOCK_REQUEST_SPACE_RETRIES_EXCEEDED(
-      "Failed to request {0,number,#} bytes after {1} attempts for blockId {2,number,#}"),
   NO_SPACE_FOR_BLOCK_MOVE(
       "Failed to find space in {0} to move blockId {1,number,#}"),
-  NO_SPACE_FOR_BLOCK_MOVE_RETRIES_EXCEEDED(
-      "Failed to find space in {0} to move blockId {1,number,#} after {2} attempts"),
   REMOVE_UNCOMMITTED_BLOCK("Cannot remove uncommitted blockId {0,number,#}"),
   TEMP_BLOCK_ID_COMMITTED(
       "Temp blockId {0,number,#} is not available, because it is already committed"),
@@ -117,7 +102,6 @@ public enum ExceptionMessage {
   JOURNAL_WRITE_AFTER_CLOSE("Cannot write entry after closing the stream"),
   JOURNAL_WRITE_FAILURE("Failed to write to journal file ({0}): {1}"),
   JOURNAL_FLUSH_FAILURE("Failed to flush journal file ({0}): {1}"),
-  UNEXPECTED_JOURNAL_ENTRY("Unexpected entry in journal: {0}"),
 
   // Raft journal
   FAILED_RAFT_BOOTSTRAP("Failed to bootstrap raft cluster with addresses {0}: {1}"),
@@ -267,7 +251,8 @@ public enum ExceptionMessage {
       "{0} {1} specified above max threshold of cluster, specified={2}, max={3}"),
 
   // mounting
-  MOUNT_POINT_ALREADY_EXISTS("Mount point {0} already exists"),
+  MOUNT_POINT_ALREADY_EXISTS("Mount point target path {0} already exists in Alluxio namespace. "
+      + "Try mounting to another path."),
   MOUNT_POINT_PREFIX_OF_ANOTHER("Mount point {0} is a prefix of {1}"),
   MOUNT_PATH_SHADOWS_PARENT_UFS(
       "Mount path {0} shadows an existing path {1} in the parent underlying filesystem"),

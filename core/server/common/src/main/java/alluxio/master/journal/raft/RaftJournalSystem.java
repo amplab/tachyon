@@ -49,7 +49,6 @@ import org.apache.ratis.proto.RaftProtos;
 import org.apache.ratis.protocol.ClientId;
 import org.apache.ratis.protocol.GroupInfoReply;
 import org.apache.ratis.protocol.GroupInfoRequest;
-import org.apache.ratis.protocol.LeaderNotReadyException;
 import org.apache.ratis.protocol.Message;
 import org.apache.ratis.protocol.RaftClientReply;
 import org.apache.ratis.protocol.RaftClientRequest;
@@ -58,6 +57,7 @@ import org.apache.ratis.protocol.RaftGroupId;
 import org.apache.ratis.protocol.RaftPeer;
 import org.apache.ratis.protocol.RaftPeerId;
 import org.apache.ratis.protocol.SetConfigurationRequest;
+import org.apache.ratis.protocol.exceptions.LeaderNotReadyException;
 import org.apache.ratis.retry.ExponentialBackoffRetry;
 import org.apache.ratis.retry.RetryPolicy;
 import org.apache.ratis.rpc.SupportedRpcType;
@@ -78,6 +78,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -288,14 +289,6 @@ public class RaftJournalSystem extends AbstractJournalSystem {
     }
     mStateMachine = new JournalStateMachine(mJournals, this);
 
-    List<InetSocketAddress> addresses = mConf.getClusterAddresses();
-    InetSocketAddress localAddress = mConf.getLocalAddress();
-    mPeerId = RaftJournalUtils.getPeerId(localAddress);
-    Set<RaftPeer> peers = addresses.stream()
-        .map(addr -> new RaftPeer(RaftJournalUtils.getPeerId(addr), addr))
-        .collect(Collectors.toSet());
-    mRaftGroup = RaftGroup.valueOf(RAFT_GROUP_ID, peers);
-
     RaftProperties properties = new RaftProperties();
     Parameters parameters = new Parameters();
 
@@ -303,7 +296,7 @@ public class RaftJournalSystem extends AbstractJournalSystem {
     RaftConfigKeys.Rpc.setType(properties, SupportedRpcType.GRPC);
 
     // RPC port
-    GrpcConfigKeys.Server.setPort(properties, localAddress.getPort());
+    GrpcConfigKeys.Server.setPort(properties, mConf.getLocalAddress().getPort());
 
     // storage path
     maybeMigrateOldJournal();
@@ -380,6 +373,24 @@ public class RaftJournalSystem extends AbstractJournalSystem {
         .setProperties(properties)
         .setParameters(parameters)
         .build();
+  }
+
+  /**
+   * @return current raft group
+   */
+  @VisibleForTesting
+  public synchronized RaftGroup getCurrentGroup() {
+    try {
+      Iterator<RaftGroup> groupIter = mServer.getGroups().iterator();
+      Preconditions.checkState(groupIter.hasNext(), "no group info found");
+      RaftGroup group = groupIter.next();
+      Preconditions.checkState(group.getGroupId() == RAFT_GROUP_ID,
+          String.format("Invalid group id %s, expecting %s", group.getGroupId(), RAFT_GROUP_ID));
+      return group;
+    } catch (IOException | IllegalStateException e) {
+      LogUtils.warnWithException(LOG, "Failed to get raft group, falling back to initial group", e);
+      return mRaftGroup;
+    }
   }
 
   private RaftClient createClient() {
@@ -676,6 +687,17 @@ public class RaftJournalSystem extends AbstractJournalSystem {
   @Override
   public synchronized void startInternal() throws InterruptedException, IOException {
     LOG.info("Initializing Raft Journal System");
+    InetSocketAddress localAddress = mConf.getLocalAddress();
+    mPeerId = RaftJournalUtils.getPeerId(localAddress);
+    List<InetSocketAddress> addresses = mConf.getClusterAddresses();
+    Set<RaftPeer> peers = addresses.stream()
+        .map(addr -> RaftPeer.newBuilder()
+                .setId(RaftJournalUtils.getPeerId(addr))
+                .setAddress(addr)
+                .build()
+        )
+        .collect(Collectors.toSet());
+    mRaftGroup = RaftGroup.valueOf(RAFT_GROUP_ID, peers);
     initServer();
     List<InetSocketAddress> clusterAddresses = mConf.getClusterAddresses();
     LOG.info("Starting Raft journal system. Cluster addresses: {}. Local address: {}",
@@ -685,7 +707,8 @@ public class RaftJournalSystem extends AbstractJournalSystem {
       mServer.start();
     } catch (IOException e) {
       String errorMessage = ExceptionMessage.FAILED_RAFT_BOOTSTRAP
-          .getMessage(Arrays.toString(clusterAddresses.toArray()), e.getCause().toString());
+          .getMessage(Arrays.toString(clusterAddresses.toArray()),
+              e.getCause() == null ? e : e.getCause().toString());
       throw new IOException(errorMessage, e.getCause());
     }
     LOG.info("Started Raft Journal System in {}ms", System.currentTimeMillis() - startTime);
@@ -702,7 +725,7 @@ public class RaftJournalSystem extends AbstractJournalSystem {
             .setRpcPort(localAddress.getPort()))
         .build();
     RaftClient client = createClient();
-    client.sendReadOnlyAsync(Message.valueOf(
+    client.async().sendReadOnly(Message.valueOf(
         UnsafeByteOperations.unsafeWrap(
             JournalQueryRequest
                 .newBuilder()
@@ -790,16 +813,23 @@ public class RaftJournalSystem extends AbstractJournalSystem {
   public synchronized CompletableFuture<RaftClientReply> sendMessageAsync(
       RaftPeerId server, Message message) {
     RaftClient client = createClient();
-    return client.getClientRpc().sendRequestAsync(
-        new RaftClientRequest(mRawClientId, server, RAFT_GROUP_ID, nextCallId(), message,
-            RaftClientRequest.staleReadRequestType(0), null)
-    ).whenComplete((reply, t) -> {
-      try {
-        client.close();
-      } catch (IOException e) {
-        throw new CompletionException(e);
-      }
-    });
+    RaftClientRequest request = RaftClientRequest.newBuilder()
+            .setClientId(mRawClientId)
+            .setServerId(server)
+            .setGroupId(RAFT_GROUP_ID)
+            .setCallId(nextCallId())
+            .setMessage(message)
+            .setType(RaftClientRequest.staleReadRequestType(0))
+            .setSlidingWindowEntry(null)
+            .build();
+    return client.getClientRpc().sendRequestAsync(request)
+            .whenComplete((reply, t) -> {
+              try {
+                client.close();
+              } catch (IOException e) {
+                throw new CompletionException(e);
+              }
+            });
   }
 
   private GroupInfoReply getGroupInfo() throws IOException {
@@ -831,9 +861,9 @@ public class RaftJournalSystem extends AbstractJournalSystem {
     RaftPeerId peerId = RaftJournalUtils.getPeerId(serverAddress);
     try (RaftClient client = createClient()) {
       Collection<RaftPeer> peers = mServer.getGroups().iterator().next().getPeers();
-      RaftClientReply reply = client.setConfiguration(peers.stream()
+      RaftClientReply reply = client.admin().setConfiguration(peers.stream()
           .filter(peer -> !peer.getId().equals(peerId))
-          .toArray(RaftPeer[]::new));
+          .collect(Collectors.toList()));
       if (reply.getException() != null) {
         throw reply.getException();
       }
@@ -854,7 +884,10 @@ public class RaftJournalSystem extends AbstractJournalSystem {
     if (peers.stream().anyMatch((peer) -> peer.getId().equals(peerId))) {
       return;
     }
-    RaftPeer newPeer = new RaftPeer(peerId, serverAddress);
+    RaftPeer newPeer = RaftPeer.newBuilder()
+            .setId(peerId)
+            .setAddress(serverAddress)
+            .build();
     List<RaftPeer> newPeers = new ArrayList<>(peers);
     newPeers.add(newPeer);
     RaftClientReply reply = mServer.setConfiguration(
@@ -913,5 +946,16 @@ public class RaftJournalSystem extends AbstractJournalSystem {
   @VisibleForTesting
   synchronized RaftServer getRaftServer() {
     return mServer;
+  }
+
+  /**
+   * Updates raft group with the current values from raft server.
+   */
+  public synchronized void updateGroup() {
+    RaftGroup newGroup = getCurrentGroup();
+    if (!newGroup.equals(mRaftGroup)) {
+      LOG.info("Raft group updated: old {}, new {}", mRaftGroup, newGroup);
+      mRaftGroup = newGroup;
+    }
   }
 }

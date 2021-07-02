@@ -53,18 +53,21 @@ The data doesn’t persist when that container no longer exists. [Docker volumes
 are the preferred way to save data outside the containers. The following two types of Docker volumes are used the most:
 
 + **Host Volume**: You manage where in the Docker host's file system to store and share the
-containers data. To create a host volume, run:
+containers data. To create a host volume, include the following when launching your containers:
 
   ```console
   $ docker run -v /path/on/host:/path/in/container ...
   ```
   The file or directory is referenced by its full path on the Docker host. It can exist on the Docker host already, or it will be created automatically if it does not yet exist.
 
-+ **Named Volume**: Docker manage where they are located. It should be be referred to by specific names.
-To create a named volume, run:
++ **Named Volume**: Docker manage where they are located. It should be referred to by specific names.
+To create a named volume, first run:
 
   ```console
   $ docker volume create volumeName
+  ```
+  Then include the following when launching your containers:
+  ```console
   $ docker run -v volumeName:/path/in/container ...
   ```
 
@@ -73,7 +76,7 @@ the host volume is recommended, since it is the easiest type of volume
 to use and very performant. More importantly, you know where to refer to the data in the host
 file system and you can manipulate the files directly and easily outside the containers.
 
-Therefore, we will use the host volume and mount the host directory `/tmp/alluxio_ufs` to the
+For example, we will use the host volume and mount the host directory `/tmp/alluxio_ufs` to the
 container location `/opt/alluxio/underFSStorage`, which is the default setting for the
 Alluxio UFS root mount point in the Alluxio docker image:
 
@@ -411,6 +414,11 @@ stop this worker container in order to start or stop FUSE service.
 Using standalone FUSE can be a complementary approach to provide the translation between POSIX and
 Alluxio on hosts without adding resources required to run workers.
 
+First make sure a directory with the right permissions exists on the host to [bind-mount](https://docs.docker.com/storage/bind-mounts/) in the Alluxio FUSE container:
+```console
+$ mkdir -p /tmp/mnt && sudo chmod -R a+rwx /tmp/mnt
+```
+
 {% navtabs Fuse-docker %}
 {% navtab FUSE on worker %}
 
@@ -429,7 +437,7 @@ $ docker run -d \
     -e ALLUXIO_JAVA_OPTS=" \
        -Dalluxio.worker.ramdisk.size=1G \
        -Dalluxio.master.hostname=localhost \
-       -Dalluxio.worker.fuse.enabled=true \
+       -Dalluxio.worker.fuse.enabled=true" \
     alluxio/{{site.ALLUXIO_DOCKER_IMAGE}} worker
 ```
 
@@ -456,14 +464,9 @@ access to Alluxio on Docker host using the POSIX API.
 
 For example, the following commands run the alluxio-fuse container as a long-running client that presents Alluxio file system through a POSIX interface on the Docker host:
 
-First make sure a directory with the right permissions exists on the host to [bind-mount](https://docs.docker.com/storage/bind-mounts/) in the Alluxio FUSE container:
-```console
-$ mkdir -p /tmp/mnt && sudo chmod -R a+rwx /tmp/mnt
-```
-
 Run the Alluxio FUSE service to create a FUSE mount in the host bind-mounted directory:
 ```console
-$ docker run --rm \
+$ docker run -d --rm \
     --net=host \
     --name=alluxio-fuse \
     -v /tmp/mnt:/mnt:rshared \

@@ -16,7 +16,6 @@ import alluxio.concurrent.LockMode;
 import alluxio.resource.LockResource;
 import alluxio.resource.RWLockResource;
 import alluxio.resource.RefCountLockResource;
-import alluxio.resource.ResourcePool;
 import alluxio.util.ThreadFactoryUtils;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -41,7 +40,7 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 /**
  * A resource pool specifically designed to contain locks and will NOT evict any entries
@@ -59,18 +58,7 @@ public class LockPool<K> implements Closeable {
   private static final String EVICTOR_THREAD_NAME = "LockPool Evictor";
 
   private final Map<K, Resource> mPool;
-  // TODO(baoloongmao): make it configurable before merge this PR.
-  private final ResourcePool<Resource> mResueLockPool = new ResourcePool(1000000) {
-    @Override
-    public void close() {
-    }
-
-    @Override
-    protected Resource createNewResource() {
-      return new Resource(mDefaultLoader.get());
-    }
-  };
-  private final Supplier<? extends ReentrantReadWriteLock> mDefaultLoader;
+  private final Function<? super K, ? extends ReentrantReadWriteLock> mDefaultLoader;
   private final int mLowWatermark;
   private final int mHighWatermark;
 
@@ -88,7 +76,7 @@ public class LockPool<K> implements Closeable {
    * @param highWatermark high watermark of the pool size
    * @param concurrencyLevel concurrency level of the pool
    */
-  public LockPool(Supplier<? extends ReentrantReadWriteLock> defaultLoader,
+  public LockPool(Function<? super K, ? extends ReentrantReadWriteLock> defaultLoader,
       int initialSize, int lowWatermark, int highWatermark, int concurrencyLevel) {
     mDefaultLoader = defaultLoader;
     mLowWatermark = lowWatermark;
@@ -179,7 +167,6 @@ public class LockPool<K> implements Closeable {
             if (candidate.mRefCount.compareAndSet(0, Integer.MIN_VALUE)) {
               mIterator.remove();
               numToEvict--;
-              mResueLockPool.release(candidate);
             }
           }
         }
@@ -269,12 +256,7 @@ public class LockPool<K> implements Closeable {
         v.mIsAccessed = true;
         return v;
       }
-      Resource res = mResueLockPool.acquireWithoutBlocking();
-      if (res == null) {
-        res = new Resource(mDefaultLoader.get());
-      }
-      res.reset();
-      return res;
+      return new Resource(mDefaultLoader.apply(k));
     });
     if (mPool.size() > mHighWatermark) {
       if (mEvictLock.tryLock()) {
@@ -338,10 +320,6 @@ public class LockPool<K> implements Closeable {
       mLock = lock;
       mIsAccessed = false;
       mRefCount = new AtomicInteger(1);
-    }
-
-    public void reset() {
-      mRefCount.set(1);
     }
   }
 }
