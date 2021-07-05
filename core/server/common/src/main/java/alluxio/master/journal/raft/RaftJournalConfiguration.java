@@ -62,19 +62,19 @@ public class RaftJournalConfiguration {
    * @param clusterAddresses addresses of all nodes in the Raft cluster
    * @return true if the cluster addresses contain the local IP, false otherwise
    */
-  private boolean checkContainLocalIp(List<InetSocketAddress> clusterAddresses) {
-    String clusterNodeIp;
-    String localAddressIp =  NetworkAddressUtils.getLocalIpAddress((int) ServerConfiguration
+  private static boolean containsLocalIp(List<InetSocketAddress> clusterAddresses) {
+    String localAddressIp = NetworkAddressUtils.getLocalIpAddress((int) ServerConfiguration
         .global().getMs(PropertyKey.NETWORK_HOST_RESOLUTION_TIMEOUT_MS));
     for (InetSocketAddress addr : clusterAddresses) {
+      String clusterNodeIp;
       try {
         clusterNodeIp = InetAddress.getByName(addr.getHostName()).getHostAddress();
         if (clusterNodeIp.equals(localAddressIp)) {
           return true;
         }
       } catch (UnknownHostException e) {
-        LOG.error(String.format("Get raft cluster node ip by hostname(%s) failed",
-            addr.getHostName()), e);
+        LOG.error("Get raft cluster node ip by hostname({}) failed",
+            addr.getHostName(), e);
       }
     }
     return false;
@@ -91,7 +91,7 @@ public class RaftJournalConfiguration {
         "Heartbeat interval (%sms) should be less than half of the election timeout (%sms)",
         getHeartbeatIntervalMs(), getElectionTimeoutMs());
     Preconditions.checkState(getClusterAddresses().contains(getLocalAddress())
-            || checkContainLocalIp(getClusterAddresses()),
+            || containsLocalIp(getClusterAddresses()),
         "The cluster addresses (%s) must contain the local master address (%s)",
         getClusterAddresses(), getLocalAddress());
   }
