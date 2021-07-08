@@ -37,14 +37,25 @@ public class UdbConfiguration extends BaseConfiguration<UdbProperty> {
   public static final String REGEX_PREFIX = "regex:";
 
   protected final Map<String, Map<String, String>> mMountOptions;
+  protected final UdbBypassSpec mBypassSpec;
+
+  /**
+   * Creates an instance with empty UdbBypassSpec.
+   * @param values the map of values
+   */
+  public UdbConfiguration(Map<String, String> values) {
+    this(values, UdbBypassSpec.empty());
+  }
 
   /**
    * Creates an instance.
    *
    * @param values the map of values
+   * @param bypassSpec bypass spec
    */
-  public UdbConfiguration(Map<String, String> values) {
+  public UdbConfiguration(Map<String, String> values, UdbBypassSpec bypassSpec) {
     super(values);
+    mBypassSpec = bypassSpec;
     mMountOptions = new HashMap<>(values.size());
     for (Map.Entry<String, String> entry : values.entrySet()) {
       if (entry.getKey().startsWith(ConfigurationUtils.MOUNT_PREFIX)) {
@@ -98,5 +109,12 @@ public class UdbConfiguration extends BaseConfiguration<UdbProperty> {
       }
     }
     return map;
+  }
+
+  /**
+   * @return UDB bypass spec
+   */
+  public UdbBypassSpec getBypassSpec() {
+    return mBypassSpec;
   }
 }
