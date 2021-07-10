@@ -22,10 +22,12 @@ import alluxio.util.io.PathUtils;
 import com.google.common.base.Objects;
 import com.google.common.io.Closer;
 import org.apache.commons.lang3.StringEscapeUtils;
+import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.FileWriter;
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -42,18 +44,48 @@ import javax.annotation.concurrent.ThreadSafe;
 @PublicApi
 public final class MetricsDocGenerator {
   private static final Logger LOG = LoggerFactory.getLogger(MetricsDocGenerator.class);
-  private static final String[] CATEGORIES =
-      new String[]{"cluster", "master", "worker", "client", "fuse"};
+  private static final String[] CATEGORIES = new String[]{
+      "client",
+      "cluster",
+      "fuse",
+      "master",
+      "worker",
+  };
   private static final String CSV_FILE_DIR = "docs/_data/table/";
   private static final String YML_FILE_DIR = "docs/_data/table/en/";
   private static final String CSV_SUFFIX = "csv";
   private static final String YML_SUFFIX = "yml";
   private static final String CSV_FILE_HEADER = "metricName,metricType";
+  private static final String TEMP_PREFIX = "temp-";
+
+  /**
+   * Compare the temp files and the committed files if validate flag is set.
+   *
+   * @param folder the location of the files to be compared
+   * @param suffix the file types (CSV/YML)
+   * @param category the category in the file names
+   * @param hasDiff a boolean indicating has there been changes
+   *
+   * @return a boolean indicating if there is anything difference
+   * between the temp files and committed files
+   */
+  public static boolean compareFiles(String folder, String suffix, String category,
+                                     boolean hasDiff) throws IOException {
+    if (!FileUtils.contentEquals(new File(folder, String.format("%s%s-metrics.%s", TEMP_PREFIX,
+        category, suffix)), new File(folder, (category + "-metrics." + suffix)))) {
+      hasDiff = true;
+      System.out.println("Metrics file " + category + "-metrics." + suffix + " changed.");
+    }
+    File tempFile = new File(folder, TEMP_PREFIX + category + "-metrics." + suffix);
+    tempFile.delete();
+    return hasDiff;
+  }
 
   /**
    * Writes the supported files for metrics system docs.
+   * @param validate validate flag
    */
-  public static void generate() throws IOException {
+  public static void generate(boolean validate) throws IOException {
     // Gets and sorts the metric keys
     List<MetricKey> defaultKeys = new ArrayList<>(MetricKey.allMetricKeys());
     Collections.sort(defaultKeys);
@@ -68,19 +100,26 @@ public final class MetricsDocGenerator {
       String category = typeStr.toLowerCase();
       metricTypeMap.put(typeStr, category);
     }
-
+    String csvFolder = PathUtils.concatPath(homeDir, CSV_FILE_DIR);
+    String ymlFolder = PathUtils.concatPath(homeDir, YML_FILE_DIR);
     try (Closer closer = Closer.create()) {
       Map<FileWriterKey, FileWriter> fileWriterMap = new HashMap<>();
-      String csvFolder = PathUtils.concatPath(homeDir, CSV_FILE_DIR);
-      String ymlFolder = PathUtils.concatPath(homeDir, YML_FILE_DIR);
       FileWriter csvFileWriter;
       FileWriter ymlFileWriter;
       for (String category : CATEGORIES) {
-        csvFileWriter = new FileWriter(PathUtils
-            .concatPath(csvFolder, category + "-metrics." + CSV_SUFFIX));
-        csvFileWriter.append(CSV_FILE_HEADER + "\n");
-        ymlFileWriter = new FileWriter(PathUtils
-            .concatPath(ymlFolder, category + "-metrics." + YML_SUFFIX));
+        if (validate) {
+          csvFileWriter = new FileWriter(PathUtils
+              .concatPath(csvFolder, (TEMP_PREFIX + category + "-metrics." + CSV_SUFFIX)));
+          csvFileWriter.append(CSV_FILE_HEADER + "\n");
+          ymlFileWriter = new FileWriter(PathUtils
+              .concatPath(ymlFolder, (TEMP_PREFIX + category + "-metrics." + YML_SUFFIX)));
+        } else {
+          csvFileWriter = new FileWriter(PathUtils
+              .concatPath(csvFolder, (category + "-metrics." + CSV_SUFFIX)));
+          csvFileWriter.append(CSV_FILE_HEADER + "\n");
+          ymlFileWriter = new FileWriter(PathUtils
+              .concatPath(ymlFolder, (category + "-metrics." + YML_SUFFIX)));
+        }
         fileWriterMap.put(new FileWriterKey(category, CSV_SUFFIX), csvFileWriter);
         fileWriterMap.put(new FileWriterKey(category, YML_SUFFIX), ymlFileWriter);
         //register file writer
@@ -90,7 +129,6 @@ public final class MetricsDocGenerator {
 
       for (MetricKey metricKey : defaultKeys) {
         String key = metricKey.toString();
-
         String[] components = key.split("\\.");
         if (components.length < 2) {
           throw new IOException(String
@@ -108,6 +146,17 @@ public final class MetricsDocGenerator {
         csvFileWriter.append(String.format("%s,%s%n", key, metricKey.getMetricType().toString()));
         ymlFileWriter.append(String.format("%s:%n  '%s'%n",
             key, StringEscapeUtils.escapeHtml4(metricKey.getDescription().replace("'", "''"))));
+      }
+    }
+    if (validate) {
+      boolean hasDiffCSV = false;
+      boolean hasDiffYML = false;
+      for (String category : CATEGORIES) {
+        hasDiffCSV = compareFiles(csvFolder, CSV_SUFFIX, category, hasDiffCSV);
+        hasDiffYML = compareFiles(ymlFolder, YML_SUFFIX, category, hasDiffYML);
+      }
+      if (!hasDiffCSV && !hasDiffYML) {
+        System.out.println("No change in metric files detected.");
       }
     }
     LOG.info("Metrics CSV/YML files were created successfully.");

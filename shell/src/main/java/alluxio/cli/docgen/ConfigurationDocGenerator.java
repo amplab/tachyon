@@ -20,10 +20,12 @@ import alluxio.util.io.PathUtils;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.io.Closer;
 import org.apache.commons.lang3.StringEscapeUtils;
+import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.FileWriter;
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -44,33 +46,69 @@ public final class ConfigurationDocGenerator {
   private static final String CSV_FILE_DIR = "docs/_data/table/";
   private static final String YML_FILE_DIR = "docs/_data/table/en/";
   public static final String CSV_FILE_HEADER = "propertyName,defaultValue";
+  private static final String TEMP_PREFIX = "temp-";
+  private static final String CSV_SUFFIX = "csv";
+  private static final String YML_SUFFIX = "yml";
+
+  private static final String[] CSV_FILE_NAMES = {
+      "cluster-management-configuration.csv",
+      "common-configuration.csv",
+      "master-configuration.csv",
+      "security-configuration.csv",
+      "user-configuration.csv",
+      "worker-configuration.csv"
+  };
+
+  private static final String[] YML_FILE_NAMES = {
+      "cluster-management-configuration.yml",
+      "common-configuration.yml",
+      "master-configuration.yml",
+      "security-configuration.yml",
+      "user-configuration.yml",
+      "worker-configuration.yml"
+  };
 
   private ConfigurationDocGenerator() {} // prevent instantiation
+
+  /**
+   * Create the FileWriter object based on if validate flag is set to true.
+   *
+   * @param filePath path for the csv/yml file
+   * @param fileName name of the csv/yml file
+   * @param validate the validate flag of the command
+   * @return a FileWriter associated with the file
+   */
+  public static FileWriter createFileWriter(String filePath, String fileName, boolean validate)
+      throws IOException {
+    if (validate) {
+      String fileNameTemp = TEMP_PREFIX.concat(fileName);
+      return new FileWriter(PathUtils.concatPath(filePath, fileNameTemp));
+    } else {
+      return new FileWriter(PathUtils.concatPath(filePath, fileName));
+    }
+  }
 
   /**
    * Writes property key to csv files.
    *
    * @param defaultKeys Collection which is from PropertyKey DEFAULT_KEYS_MAP.values()
    * @param filePath    path for csv files
+   * @param validate    validate flag
    */
   @VisibleForTesting
-  public static void writeCSVFile(Collection<? extends PropertyKey> defaultKeys, String filePath)
-      throws IOException {
+  public static void handleCSVFile(Collection<? extends PropertyKey> defaultKeys,
+                                  String filePath, boolean validate) throws IOException {
     if (defaultKeys.size() == 0) {
       return;
     }
 
     FileWriter fileWriter;
     Closer closer = Closer.create();
-    String[] fileNames = {"user-configuration.csv", "master-configuration.csv",
-        "worker-configuration.csv", "security-configuration.csv",
-        "common-configuration.csv", "cluster-management-configuration.csv"};
-
     try {
       // HashMap for FileWriter per each category
       Map<String, FileWriter> fileWriterMap = new HashMap<>();
-      for (String fileName : fileNames) {
-        fileWriter = new FileWriter(PathUtils.concatPath(filePath, fileName));
+      for (String fileName : CSV_FILE_NAMES) {
+        fileWriter = createFileWriter(filePath, fileName, validate);
         // Write the CSV file header and line separator after the header
         fileWriter.append(CSV_FILE_HEADER + "\n");
         //put fileWriter
@@ -119,8 +157,21 @@ public final class ConfigurationDocGenerator {
     } finally {
       try {
         closer.close();
+        if (validate) {
+          compareFiles(CSV_FILE_NAMES, filePath, CSV_SUFFIX);
+        }
       } catch (IOException e) {
-        LOG.error("Error while flushing/closing Property Key CSV FileWriter", e);
+        LOG.error("Error while flushing/closing Property Key CSV FileWriter "
+            + "or compiling generated files to the existing files if validate flag is set", e);
+      }
+      if (validate) {
+        for (String fileName : CSV_FILE_NAMES) {
+          String fileNameTemp = TEMP_PREFIX.concat(fileName);
+          File tempFile = new File(PathUtils.concatPath(filePath, fileNameTemp));
+          if (tempFile.exists()) {
+            tempFile.delete();
+          }
+        }
       }
     }
   }
@@ -130,9 +181,11 @@ public final class ConfigurationDocGenerator {
    *
    * @param defaultKeys Collection which is from PropertyKey DEFAULT_KEYS_MAP.values()
    * @param filePath path for csv files
+   * @param validate validate flag
    */
   @VisibleForTesting
-  public static void writeYMLFile(Collection<? extends PropertyKey> defaultKeys, String filePath)
+  public static void handleYMLFile(Collection<? extends PropertyKey> defaultKeys,
+                                  String filePath, boolean validate)
       throws IOException {
     if (defaultKeys.size() == 0) {
       return;
@@ -140,16 +193,12 @@ public final class ConfigurationDocGenerator {
 
     FileWriter fileWriter;
     Closer closer = Closer.create();
-    String[] fileNames = {"user-configuration.yml", "master-configuration.yml",
-        "worker-configuration.yml", "security-configuration.yml",
-        "common-configuration.yml", "cluster-management-configuration.yml"
-    };
 
     try {
       // HashMap for FileWriter per each category
       Map<String, FileWriter> fileWriterMap = new HashMap<>();
-      for (String fileName : fileNames) {
-        fileWriter = new FileWriter(PathUtils.concatPath(filePath, fileName));
+      for (String fileName : YML_FILE_NAMES) {
+        fileWriter = createFileWriter(filePath, fileName, validate);
         //put fileWriter
         String key = fileName.substring(0, fileName.indexOf("configuration") - 1);
         fileWriterMap.put(key, fileWriter);
@@ -197,26 +246,72 @@ public final class ConfigurationDocGenerator {
     } finally {
       try {
         closer.close();
+        if (validate) {
+          compareFiles(YML_FILE_NAMES, filePath, YML_SUFFIX);
+        }
       } catch (IOException e) {
         LOG.error("Error while flushing/closing YML files for description of Property Keys "
-            + "FileWriter", e);
+            + "FileWriter or compiling generated files to the existing files if validate flag "
+            + "is set", e);
+      }
+      if (validate) {
+        for (String fileName : YML_FILE_NAMES) {
+          String fileNameTemp = TEMP_PREFIX.concat(fileName);
+          File tempFile = new File(PathUtils.concatPath(filePath, fileNameTemp));
+          if (tempFile.exists()) {
+            tempFile.delete();
+          }
+        }
       }
     }
   }
 
   /**
-   * Generates the configuration docs.
+   * Helper method that compare the temp file and the committed file when validate flag is used.
+   *
+   * @param fileNames the name of the file
+   * @param filePath the path to the file
+   * @param fileType the type of the file that we are comparing (CSV/YML)
    */
-  public static void generate() throws IOException {
+  public static void compareFiles(String[] fileNames, String filePath, String fileType)
+      throws IOException {
+    boolean hasDiff = false;
+
+    for (String fileName : fileNames) {
+      String fileNameTemp = TEMP_PREFIX.concat(fileName);
+      File committedFile = new File(filePath, fileName);
+      File tempFile = new File(filePath, fileNameTemp);
+      if (!committedFile.exists()) {
+        throw new IOException("Committed file does not exists");
+      }
+      if (!tempFile.exists()) {
+        throw new IOException("Temporary generated file does not exists");
+      }
+      if (!FileUtils.contentEquals(committedFile, tempFile)) {
+        hasDiff = true;
+        System.out.printf("Config file %s changed.%n", fileName);
+      }
+    }
+    if (!hasDiff) {
+      System.out.println("No change in config " + fileType + " files detected.");
+    }
+  }
+
+  /**
+   * Generates the configuration docs.
+   * @param validate validate flag
+   */
+  public static void generate(boolean validate) throws IOException {
     Collection<? extends PropertyKey> defaultKeys = PropertyKey.defaultKeys();
     defaultKeys.removeIf(key -> key.isHidden());
     String homeDir = new InstancedConfiguration(ConfigurationUtils.defaults())
         .get(PropertyKey.HOME);
     // generate CSV files
     String filePath = PathUtils.concatPath(homeDir, CSV_FILE_DIR);
-    writeCSVFile(defaultKeys, filePath);
+    handleCSVFile(defaultKeys, filePath, validate);
+
     // generate YML files
     filePath = PathUtils.concatPath(homeDir, YML_FILE_DIR);
-    writeYMLFile(defaultKeys, filePath);
+    handleYMLFile(defaultKeys, filePath, validate);
   }
 }

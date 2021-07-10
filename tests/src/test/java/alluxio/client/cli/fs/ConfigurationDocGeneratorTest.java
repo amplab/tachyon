@@ -120,15 +120,19 @@ public class ConfigurationDocGeneratorTest {
     PropertyKey pKey = mTestConf.getFirst();
     defaultKeys.add(pKey);
 
-    ConfigurationDocGenerator.writeCSVFile(defaultKeys, mLocation);
-    String filePath = PathUtils.concatPath(mLocation, mTestConf.getSecond());
-    Path p = Paths.get(filePath);
-    assertTrue(Files.exists(p));
+    // validate need to be set to false first in order to generate docs in the path
+    boolean[] validateList = {false, true};
+    for (boolean validate: validateList) {
+      ConfigurationDocGenerator.handleCSVFile(defaultKeys, mLocation, validate);
+      String filePath = PathUtils.concatPath(mLocation, mTestConf.getSecond());
+      Path p = Paths.get(filePath);
+      assertTrue(Files.exists(p));
 
-    //assert file contents
-    List<String> userFile = Files.readAllLines(p, StandardCharsets.UTF_8);
-    String defaultValue = ServerConfiguration.get(pKey);
-    checkFileContents(String.format("%s,\"%s\"", pKey, defaultValue), userFile, mFileType);
+      //assert file contents
+      List<String> userFile = Files.readAllLines(p, StandardCharsets.UTF_8);
+      String defaultValue = ServerConfiguration.get(pKey);
+      checkFileContents(String.format("%s,\"%s\"", pKey, defaultValue), userFile, mFileType);
+    }
   }
 
   @Test
@@ -141,14 +145,18 @@ public class ConfigurationDocGeneratorTest {
     String description = pKey.getDescription();
     defaultKeys.add(pKey);
 
-    ConfigurationDocGenerator.writeYMLFile(defaultKeys, mLocation);
-    String filePath = PathUtils.concatPath(mLocation, mTestConf.getSecond());
-    Path p = Paths.get(filePath);
-    assertTrue(Files.exists(p));
+    // validate need to be set to false first in order to generate docs in the path
+    boolean[] validateList = {false, true};
+    for (boolean validate: validateList) {
+      ConfigurationDocGenerator.handleYMLFile(defaultKeys, mLocation, validate);
+      String filePath = PathUtils.concatPath(mLocation, mTestConf.getSecond());
+      Path p = Paths.get(filePath);
+      assertTrue(Files.exists(p));
 
-    //assert file contents
-    List<String> keyDescription = Files.readAllLines(p, StandardCharsets.UTF_8);
-    String expected = pKey + ":\n  '" + description.replace("'", "''") + "'";
-    checkFileContents(expected, keyDescription, mFileType);
+      //assert file contents
+      List<String> keyDescription = Files.readAllLines(p, StandardCharsets.UTF_8);
+      String expected = pKey + ":\n  '" + description.replace("'", "''") + "'";
+      checkFileContents(expected, keyDescription, mFileType);
+    }
   }
 }
