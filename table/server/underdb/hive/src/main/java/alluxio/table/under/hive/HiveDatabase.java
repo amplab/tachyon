@@ -56,6 +56,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -75,7 +76,6 @@ public class HiveDatabase implements UnderDatabase {
   private final String mHiveDbName;
   /** path translator that records mappings between ufs paths and Alluxio paths. */
   private final PathTranslator mPathTranslator;
-  private final AtomicBoolean mIsMounted;
 
   private static final HiveClientPoolCache CLIENT_POOL_CACHE = new HiveClientPoolCache();
   /** Hive client is not thread-safe, so use a client pool for concurrency. */
@@ -89,7 +89,6 @@ public class HiveDatabase implements UnderDatabase {
     mHiveDbName = hiveDbName;
     mClientPool = CLIENT_POOL_CACHE.getPool(connectionUri);
     mPathTranslator = new PathTranslator();
-    mIsMounted = new AtomicBoolean(false);
   }
 
   /**
@@ -159,11 +158,9 @@ public class HiveDatabase implements UnderDatabase {
    *
    * @param bypassSpec bypass spec
    */
-  private void mount(UdbInExClusionSpec bypassSpec) throws IOException {
-    List<String> tableNames = getTableNames().stream()
-        // ignored tables should not be mounted
-        .filter((tableName) -> !bypassSpec.hasIgnoredTable(tableName))
-        .collect(Collectors.toList());
+  @Override
+  public void mount(Set<String> tableNames, UdbInExClusionSpec bypassSpec) throws IOException {
+    // Todo(bowen): prevent mounting multiple times, and with different sets of tables?
     Map<Table, List<Partition>> tables = new HashMap<>(tableNames.size());
     for (String tableName : tableNames) {
       try (CloseableResource<IMetaStoreClient> client = mClientPool.acquireClientResource()) {
@@ -177,15 +174,15 @@ public class HiveDatabase implements UnderDatabase {
       }
     }
 
-    mount(new ArrayList<>(tables.keySet()), bypassSpec);
+    mountTables(tables.keySet(), bypassSpec);
     for (Map.Entry<Table, List<Partition>> entry : tables.entrySet()) {
       Table table = entry.getKey();
       List<Partition> partitions = entry.getValue();
-      mount(table, partitions, bypassSpec);
+      mountPartitions(table, partitions, bypassSpec);
     }
   }
 
-  private void mount(List<Table> tables, UdbInExClusionSpec bypassSpec)
+  private void mountTables(Set<Table> tables, UdbInExClusionSpec bypassSpec)
       throws IOException {
     HashSet<AlluxioURI> fragmentRootUfsUris = new HashSet<>();
     for (Table table : tables) {
@@ -206,7 +203,8 @@ public class HiveDatabase implements UnderDatabase {
     }
   }
 
-  private void mount(Table table, List<Partition> partitions, UdbInExClusionSpec bypassSpec)
+  private void mountPartitions(
+      Table table, List<Partition> partitions, UdbInExClusionSpec bypassSpec)
       throws IOException {
     final String tableName = table.getTableName();
     final String tableUfsPath = table.getSd().getLocation();
@@ -275,7 +273,7 @@ public class HiveDatabase implements UnderDatabase {
   }
 
   @Override
-  public UdbTable getTable(String tableName, UdbInExClusionSpec bypassSpec) throws IOException {
+  public UdbTable getTable(String tableName) throws IOException {
     try {
       Table table;
       List<Partition> partitions;
@@ -315,10 +313,6 @@ public class HiveDatabase implements UnderDatabase {
         }
       }
 
-      if (mIsMounted.compareAndSet(false, true)) {
-        // TODO(bowen): bypass spec updates are ignored
-        mount(bypassSpec);
-      }
       List<ColumnStatisticsInfo> colStats =
           columnStats.stream().map(HiveUtils::toProto).collect(Collectors.toList());
       // construct table layout

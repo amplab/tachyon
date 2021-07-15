@@ -55,6 +55,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
 
@@ -237,8 +238,13 @@ public class Database implements Journaled {
     List<Callable<Void>> tasks = new ArrayList<>(udbTableNames.size());
     final Database thisDb = this;
     UdbInExClusionSpec inExClusionSpec = mDbConfig.getUdbInExClusionSpec();
+    Set<String> nonIgnoredTableNames = udbTableNames.stream()
+        // ignored tables should not be mounted
+        .filter((tableName) -> !inExClusionSpec.hasIgnoredTable(tableName))
+        .collect(Collectors.toSet());
+    mUdb.mount(nonIgnoredTableNames, inExClusionSpec);
     for (String tableName : udbTableNames) {
-      if (inExClusionSpec.hasIgnoredTable(tableName)) {
+      if (!nonIgnoredTableNames.contains(tableName)) {
         // this table should be ignored.
         builder.addTablesIgnored(tableName);
         tablesSynced.incrementAndGet();
@@ -248,7 +254,7 @@ public class Database implements Journaled {
         // Save all exceptions
         try {
           Table previousTable = mTables.get(tableName);
-          UdbTable udbTable = mUdb.getTable(tableName, inExClusionSpec);
+          UdbTable udbTable = mUdb.getTable(tableName);
           Table newTable = Table.create(thisDb, udbTable, previousTable);
 
           if (newTable != null) {
