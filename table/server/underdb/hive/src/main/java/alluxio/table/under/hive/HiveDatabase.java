@@ -31,6 +31,7 @@ import alluxio.table.common.udb.UdbUtils;
 import alluxio.table.common.udb.UnderDatabase;
 import alluxio.table.under.hive.util.HiveClientPoolCache;
 import alluxio.table.under.hive.util.HiveClientPool;
+import alluxio.util.io.PathUtils;
 
 import com.google.common.collect.Lists;
 import org.apache.hadoop.hive.common.FileUtils;
@@ -174,11 +175,18 @@ public class HiveDatabase implements UnderDatabase {
       }
     }
 
-    mountTables(tables.keySet(), bypassSpec);
-    for (Map.Entry<Table, List<Partition>> entry : tables.entrySet()) {
-      Table table = entry.getKey();
-      List<Partition> partitions = entry.getValue();
-      mountPartitions(table, partitions, bypassSpec);
+    if (mConfiguration.getBoolean(Property.GROUP_MOUNT_POINTS)) {
+      LOG.debug("UDB group mount points enabled");
+      mountTables(tables.keySet(), bypassSpec);
+      for (Map.Entry<Table, List<Partition>> entry : tables.entrySet()) {
+        Table table = entry.getKey();
+        List<Partition> partitions = entry.getValue();
+        mountPartitions(table, partitions, bypassSpec);
+      }
+    } else {
+      for (Map.Entry<Table, List<Partition>> entry : tables.entrySet()) {
+        mountAlluxioPaths(entry.getKey(), entry.getValue(), bypassSpec);
+      }
     }
   }
 
@@ -263,6 +271,69 @@ public class HiveDatabase implements UnderDatabase {
               + "hiveUfsLocation: %s, AlluxioLocation: %s, error: %s",
           rootUfsUri, fragmentAlluxioUri, e.getMessage()),
           e);
+    }
+  }
+
+  private void mountAlluxioPaths(Table table, List<Partition> partitions,
+                                 UdbInExClusionSpec bypassSpec)
+      throws IOException {
+    String tableName = table.getTableName();
+    AlluxioURI ufsUri;
+    AlluxioURI alluxioUri = mUdbContext.getTableLocation(tableName);
+    String hiveUfsUri = table.getSd().getLocation();
+    if (hiveUfsUri == null) {
+      LOG.error(
+          "The location of table {} of database {} is null", tableName, mHiveDbName);
+      return;
+    }
+
+    try {
+      if (bypassSpec.hasFullyBypassedTable(tableName)) {
+        mPathTranslator.addMapping(hiveUfsUri, hiveUfsUri);
+        return;
+      }
+      ufsUri = new AlluxioURI(table.getSd().getLocation());
+      mPathTranslator.addMapping(
+          UdbUtils.mountAlluxioPath(tableName,
+              ufsUri,
+              alluxioUri,
+              mUdbContext,
+              mConfiguration),
+          hiveUfsUri);
+
+      for (Partition part : partitions) {
+        AlluxioURI partitionUri;
+        if (part.getSd() != null && part.getSd().getLocation() != null) {
+          partitionUri = new AlluxioURI(part.getSd().getLocation());
+          if (!mConfiguration.getBoolean(Property.ALLOW_DIFF_PART_LOC_PREFIX)
+              && !ufsUri.isAncestorOf(partitionUri)) {
+            continue;
+          }
+          hiveUfsUri = part.getSd().getLocation();
+          String partName = makePartName(table, part);
+          if (bypassSpec.hasBypassedPartition(tableName, partName)) {
+            mPathTranslator.addMapping(partitionUri.getPath(), partitionUri.getPath());
+            continue;
+          }
+          alluxioUri = new AlluxioURI(PathUtils.concatPath(
+              mUdbContext.getTableLocation(tableName).getPath(), partName));
+
+          // mount partition path if it is not already mounted as part of the table path mount
+          mPathTranslator.addMapping(
+              UdbUtils.mountAlluxioPath(tableName,
+                  partitionUri,
+                  alluxioUri,
+                  mUdbContext,
+                  mConfiguration),
+              hiveUfsUri);
+        }
+      }
+    } catch (AlluxioException e) {
+      throw new IOException(
+          "Failed to mount table location. tableName: " + tableName
+              + " hiveUfsLocation: " + hiveUfsUri
+              + " AlluxioLocation: " + alluxioUri
+              + " error: " + e.getMessage(), e);
     }
   }
 
