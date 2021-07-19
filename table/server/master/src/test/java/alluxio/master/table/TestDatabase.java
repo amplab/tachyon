@@ -16,13 +16,14 @@ import alluxio.collections.ConcurrentHashSet;
 import alluxio.conf.ServerConfiguration;
 import alluxio.exception.status.NotFoundException;
 import alluxio.grpc.table.PrincipalType;
-import alluxio.table.common.udb.UdbBypassSpec;
+import alluxio.table.common.udb.UdbInExClusionSpec;
 import alluxio.table.common.udb.UdbConfiguration;
 import alluxio.table.common.udb.UdbContext;
 import alluxio.table.common.udb.UdbTable;
 import alluxio.table.common.udb.UnderDatabase;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Sets;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -112,7 +113,18 @@ public class TestDatabase implements UnderDatabase {
   }
 
   @Override
-  public UdbTable getTable(String tableName, UdbBypassSpec bypassSpec) throws IOException {
+  public void mount(Set<String> tableNames, UdbInExClusionSpec bypassSpec) throws IOException {
+    checkDbName();
+    Set<String> nonExistentTableNames = Sets.difference(tableNames, mUdbTables.keySet());
+    if (nonExistentTableNames.size() != 0) {
+      throw new NotFoundException(String.format("Tables [%s] do not exist",
+          String.join(", ", nonExistentTableNames)));
+    }
+    // else, do nothing
+  }
+
+  @Override
+  public UdbTable getTable(String tableName) throws IOException {
     checkDbName();
     if (!mUdbTables.containsKey(tableName)) {
       throw new NotFoundException("Table " + tableName + " does not exist.");

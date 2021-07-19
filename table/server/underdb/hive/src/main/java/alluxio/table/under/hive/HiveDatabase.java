@@ -13,6 +13,7 @@ package alluxio.table.under.hive;
 
 import alluxio.AlluxioURI;
 import alluxio.exception.AlluxioException;
+import alluxio.exception.InvalidPathException;
 import alluxio.exception.status.NotFoundException;
 import alluxio.grpc.table.ColumnStatisticsInfo;
 import alluxio.grpc.table.Layout;
@@ -22,7 +23,7 @@ import alluxio.resource.CloseableResource;
 import alluxio.table.common.UdbPartition;
 import alluxio.table.common.layout.HiveLayout;
 import alluxio.table.common.udb.PathTranslator;
-import alluxio.table.common.udb.UdbBypassSpec;
+import alluxio.table.common.udb.UdbInExClusionSpec;
 import alluxio.table.common.udb.UdbConfiguration;
 import alluxio.table.common.udb.UdbContext;
 import alluxio.table.common.udb.UdbTable;
@@ -52,9 +53,12 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 /**
@@ -71,6 +75,8 @@ public class HiveDatabase implements UnderDatabase {
   private final String mConnectionUri;
   /** the name of the hive db. */
   private final String mHiveDbName;
+  /** path translator that records mappings between ufs paths and Alluxio paths. */
+  private final PathTranslator mPathTranslator;
 
   private static final HiveClientPoolCache CLIENT_POOL_CACHE = new HiveClientPoolCache();
   /** Hive client is not thread-safe, so use a client pool for concurrency. */
@@ -83,6 +89,7 @@ public class HiveDatabase implements UnderDatabase {
     mConnectionUri = connectionUri;
     mHiveDbName = hiveDbName;
     mClientPool = CLIENT_POOL_CACHE.getPool(connectionUri);
+    mPathTranslator = new PathTranslator();
   }
 
   /**
@@ -146,22 +153,147 @@ public class HiveDatabase implements UnderDatabase {
     }
   }
 
-  private PathTranslator mountAlluxioPaths(Table table, List<Partition> partitions,
-      UdbBypassSpec bypassSpec)
+  /**
+   * Mounts the database to Alluxio filesystem. This method mounts tables and partitions
+   * (if applicable) within this database to Alluxio filesystem.
+   *
+   * @param bypassSpec bypass spec
+   */
+  @Override
+  public void mount(Set<String> tableNames, UdbInExClusionSpec bypassSpec) throws IOException {
+    // Todo(bowen): prevent mounting multiple times, and with different sets of tables?
+    Map<Table, List<Partition>> tables = new HashMap<>(tableNames.size());
+    for (String tableName : tableNames) {
+      try (CloseableResource<IMetaStoreClient> client = mClientPool.acquireClientResource()) {
+        Table table = client.get().getTable(mHiveDbName, tableName);
+        List<Partition> partitions =
+            client.get().listPartitions(mHiveDbName, table.getTableName(), (short) -1);
+        tables.put(table, partitions);
+      } catch (TException e) {
+        LOG.error(
+            "Failed to get table {} and partitions of database {}", tableName, mHiveDbName);
+      }
+    }
+
+    if (mConfiguration.getBoolean(Property.GROUP_MOUNT_POINTS)) {
+      LOG.debug("UDB group mount points enabled");
+      mountTables(tables.keySet(), bypassSpec);
+      for (Map.Entry<Table, List<Partition>> entry : tables.entrySet()) {
+        Table table = entry.getKey();
+        List<Partition> partitions = entry.getValue();
+        mountPartitions(table, partitions, bypassSpec);
+      }
+    } else {
+      for (Map.Entry<Table, List<Partition>> entry : tables.entrySet()) {
+        mountAlluxioPaths(entry.getKey(), entry.getValue(), bypassSpec);
+      }
+    }
+  }
+
+  private void mountTables(Set<Table> tables, UdbInExClusionSpec bypassSpec)
+      throws IOException {
+    HashSet<AlluxioURI> fragmentRootUfsUris = new HashSet<>();
+    for (Table table : tables) {
+      if (table.getSd() == null || table.getSd().getLocation() == null) {
+        continue;
+      }
+      String tableUfsPath = table.getSd().getLocation();
+      if (bypassSpec.hasFullyBypassedTable(table.getTableName())) {
+        mPathTranslator.addMapping(tableUfsPath, tableUfsPath);
+        continue;
+      }
+      AlluxioURI tableUfsUri = new AlluxioURI(tableUfsPath);
+      AlluxioURI rootUfsUri = new AlluxioURI(tableUfsUri, "/", false);
+      fragmentRootUfsUris.add(rootUfsUri);
+    }
+    for (AlluxioURI rootUfsUri : fragmentRootUfsUris) {
+      mountFragmentAndAddMapping(rootUfsUri);
+    }
+  }
+
+  private void mountPartitions(
+      Table table, List<Partition> partitions, UdbInExClusionSpec bypassSpec)
+      throws IOException {
+    final String tableName = table.getTableName();
+    final String tableUfsPath = table.getSd().getLocation();
+    if (tableUfsPath == null) {
+      LOG.error(
+          "The location of table {} of database {} is null", tableName, mHiveDbName);
+      return;
+    }
+    final AlluxioURI tableUfsUri = new AlluxioURI(tableUfsPath);
+    final AlluxioURI rootUfsUri = new AlluxioURI(tableUfsUri, "/", false);
+
+    for (Partition part : partitions) {
+      if (part.getSd() == null || part.getSd().getLocation() == null) {
+        continue;
+      }
+      String partitionUfsPath = part.getSd().getLocation();
+      AlluxioURI partitionUfsUri = new AlluxioURI(partitionUfsPath);
+      String partName = makePartName(table, part);
+      if (bypassSpec.hasBypassedPartition(tableName, partName)) {
+        mPathTranslator.addMapping(partitionUfsPath, partitionUfsPath);
+        continue;
+      }
+      boolean isAncestor;
+      try {
+        isAncestor = rootUfsUri.isAncestorOf(partitionUfsUri);
+      } catch (InvalidPathException e) {
+        throw new IOException(e);
+      }
+      if (!isAncestor && mConfiguration.getBoolean(Property.ALLOW_DIFF_PART_LOC_PREFIX)) {
+        // case 1: partition is NOT located on the same physical node with the parent table,
+        // but config says mount it anyway
+        // action: mount its containing fragment
+        mountFragmentAndAddMapping(rootUfsUri);
+      }
+      // partition on the same node,
+      // or config not allowing mounting a partition on a different node
+      // action: ignore it
+    }
+  }
+
+  private void mountFragmentAndAddMapping(AlluxioURI rootUfsUri)
+      throws IOException {
+    AlluxioURI fragmentAlluxioUri = mUdbContext.getFragmentLocation(rootUfsUri);
+    try {
+      mPathTranslator.addMapping(
+          UdbUtils.mountFragment(mHiveDbName,
+              rootUfsUri,
+              fragmentAlluxioUri,
+              mUdbContext,
+              mConfiguration),
+          rootUfsUri.toString()
+      );
+    } catch (AlluxioException e) {
+      throw new IOException(String.format(
+          "Failed to mount database fragment. "
+              + "hiveUfsLocation: %s, AlluxioLocation: %s, error: %s",
+          rootUfsUri, fragmentAlluxioUri, e.getMessage()),
+          e);
+    }
+  }
+
+  private void mountAlluxioPaths(Table table, List<Partition> partitions,
+                                 UdbInExClusionSpec bypassSpec)
       throws IOException {
     String tableName = table.getTableName();
     AlluxioURI ufsUri;
     AlluxioURI alluxioUri = mUdbContext.getTableLocation(tableName);
     String hiveUfsUri = table.getSd().getLocation();
+    if (hiveUfsUri == null) {
+      LOG.error(
+          "The location of table {} of database {} is null", tableName, mHiveDbName);
+      return;
+    }
 
     try {
-      PathTranslator pathTranslator = new PathTranslator();
-      if (bypassSpec.hasFullTable(tableName)) {
-        pathTranslator.addMapping(hiveUfsUri, hiveUfsUri);
-        return pathTranslator;
+      if (bypassSpec.hasFullyBypassedTable(tableName)) {
+        mPathTranslator.addMapping(hiveUfsUri, hiveUfsUri);
+        return;
       }
       ufsUri = new AlluxioURI(table.getSd().getLocation());
-      pathTranslator.addMapping(
+      mPathTranslator.addMapping(
           UdbUtils.mountAlluxioPath(tableName,
               ufsUri,
               alluxioUri,
@@ -178,22 +310,16 @@ public class HiveDatabase implements UnderDatabase {
             continue;
           }
           hiveUfsUri = part.getSd().getLocation();
-          String partName = part.getValues().toString();
-          try {
-            partName = Warehouse.makePartName(table.getPartitionKeys(), part.getValues());
-          } catch (MetaException e) {
-            LOG.warn("Error making partition name for table {}, partition {}", tableName,
-                part.getValues().toString());
-          }
-          if (bypassSpec.hasPartition(tableName, partName)) {
-            pathTranslator.addMapping(partitionUri.getPath(), partitionUri.getPath());
+          String partName = makePartName(table, part);
+          if (bypassSpec.hasBypassedPartition(tableName, partName)) {
+            mPathTranslator.addMapping(partitionUri.getPath(), partitionUri.getPath());
             continue;
           }
           alluxioUri = new AlluxioURI(PathUtils.concatPath(
               mUdbContext.getTableLocation(tableName).getPath(), partName));
 
           // mount partition path if it is not already mounted as part of the table path mount
-          pathTranslator.addMapping(
+          mPathTranslator.addMapping(
               UdbUtils.mountAlluxioPath(tableName,
                   partitionUri,
                   alluxioUri,
@@ -202,7 +328,6 @@ public class HiveDatabase implements UnderDatabase {
               hiveUfsUri);
         }
       }
-      return pathTranslator;
     } catch (AlluxioException e) {
       throw new IOException(
           "Failed to mount table location. tableName: " + tableName
@@ -212,8 +337,19 @@ public class HiveDatabase implements UnderDatabase {
     }
   }
 
+  private static String makePartName(Table table, Partition partition) {
+    String partName = partition.getValues().toString();
+    try {
+      partName = Warehouse.makePartName(table.getPartitionKeys(), partition.getValues());
+    } catch (MetaException e) {
+      LOG.warn("Error making partition name for table {}, partition {}", table.getTableName(),
+          partition.getValues().toString());
+    }
+    return partName;
+  }
+
   @Override
-  public UdbTable getTable(String tableName, UdbBypassSpec bypassSpec) throws IOException {
+  public UdbTable getTable(String tableName) throws IOException {
     try {
       Table table;
       List<Partition> partitions;
@@ -253,7 +389,6 @@ public class HiveDatabase implements UnderDatabase {
         }
       }
 
-      PathTranslator pathTranslator = mountAlluxioPaths(table, partitions, bypassSpec);
       List<ColumnStatisticsInfo> colStats =
           columnStats.stream().map(HiveUtils::toProto).collect(Collectors.toList());
       // construct table layout
@@ -261,7 +396,7 @@ public class HiveDatabase implements UnderDatabase {
           .setDbName(getUdbContext().getDbName())
           .setTableName(tableName)
           .addAllDataCols(HiveUtils.toProto(table.getSd().getCols()))
-          .setStorage(HiveUtils.toProto(table.getSd(), pathTranslator))
+          .setStorage(HiveUtils.toProto(table.getSd(), mPathTranslator))
           .putAllParameters(table.getParameters())
           // ignore partition name
           .build();
@@ -279,7 +414,7 @@ public class HiveDatabase implements UnderDatabase {
             .setDbName(getUdbContext().getDbName())
             .setTableName(tableName)
             .addAllDataCols(HiveUtils.toProto(table.getSd().getCols()))
-            .setStorage(HiveUtils.toProto(table.getSd(), pathTranslator))
+            .setStorage(HiveUtils.toProto(table.getSd(), mPathTranslator))
             .setPartitionName(tableName)
             .putAllParameters(table.getParameters());
         udbPartitions.add(new HivePartition(
@@ -291,7 +426,7 @@ public class HiveDatabase implements UnderDatabase {
               .setDbName(getUdbContext().getDbName())
               .setTableName(tableName)
               .addAllDataCols(HiveUtils.toProto(partition.getSd().getCols()))
-              .setStorage(HiveUtils.toProto(partition.getSd(), pathTranslator))
+              .setStorage(HiveUtils.toProto(partition.getSd(), mPathTranslator))
               .setPartitionName(partName)
               .putAllParameters(partition.getParameters());
           if (partition.getValues() != null) {

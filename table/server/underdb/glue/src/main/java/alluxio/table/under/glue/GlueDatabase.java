@@ -14,6 +14,7 @@ package alluxio.table.under.glue;
 import alluxio.AlluxioURI;
 import alluxio.exception.AlluxioException;
 import alluxio.exception.status.NotFoundException;
+import alluxio.exception.status.UnimplementedException;
 import alluxio.grpc.table.ColumnStatisticsInfo;
 import alluxio.grpc.table.Layout;
 import alluxio.grpc.table.layout.hive.PartitionInfo;
@@ -21,7 +22,7 @@ import alluxio.master.table.DatabaseInfo;
 import alluxio.table.common.UdbPartition;
 import alluxio.table.common.layout.HiveLayout;
 import alluxio.table.common.udb.PathTranslator;
-import alluxio.table.common.udb.UdbBypassSpec;
+import alluxio.table.common.udb.UdbInExClusionSpec;
 import alluxio.table.common.udb.UdbConfiguration;
 import alluxio.table.common.udb.UdbContext;
 import alluxio.table.common.udb.UdbTable;
@@ -65,6 +66,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -78,6 +80,7 @@ public class GlueDatabase implements UnderDatabase {
   private final UdbConfiguration mGlueConfiguration;
   /** the name of the glue db. */
   private final String mGlueDbName;
+  private final PathTranslator mPathTranslator;
 
   /** the owner name of glue database, which is an fake place holder. */
   private final String mOwnerName = "PUBLIC_OWNER";
@@ -89,6 +92,7 @@ public class GlueDatabase implements UnderDatabase {
     mGlueConfiguration = glueConfig;
     mGlueClient = createAsyncGlueClient(glueConfig);
     mGlueDbName = glueDbName;
+    mPathTranslator = new PathTranslator();
   }
 
   /**
@@ -237,8 +241,8 @@ public class GlueDatabase implements UnderDatabase {
   }
 
   @VisibleForTesting
-  private PathTranslator mountAlluxioPaths(Table table, List<Partition> partitions,
-      UdbBypassSpec bypassSpec)
+  private void mountAlluxioPaths(Table table, List<Partition> partitions,
+      UdbInExClusionSpec bypassSpec)
       throws IOException {
     String tableName = table.getName();
     AlluxioURI ufsUri;
@@ -246,13 +250,12 @@ public class GlueDatabase implements UnderDatabase {
     String glueUfsUri = table.getStorageDescriptor().getLocation();
 
     try {
-      PathTranslator pathTranslator = new PathTranslator();
-      if (bypassSpec.hasFullTable(tableName)) {
-        pathTranslator.addMapping(glueUfsUri, glueUfsUri);
-        return pathTranslator;
+      if (bypassSpec.hasFullyBypassedTable(tableName)) {
+        mPathTranslator.addMapping(glueUfsUri, glueUfsUri);
+        return;
       }
       ufsUri = new AlluxioURI(table.getStorageDescriptor().getLocation());
-      pathTranslator.addMapping(
+      mPathTranslator.addMapping(
           UdbUtils.mountAlluxioPath(
               tableName,
               ufsUri,
@@ -283,8 +286,8 @@ public class GlueDatabase implements UnderDatabase {
                 mGlueDbName,
                 mGlueConfiguration.get(Property.CATALOG_ID));
           }
-          if (bypassSpec.hasPartition(tableName, partitionName)) {
-            pathTranslator.addMapping(partitionUri.getPath(), partitionUri.getPath());
+          if (bypassSpec.hasBypassedPartition(tableName, partitionName)) {
+            mPathTranslator.addMapping(partitionUri.getPath(), partitionUri.getPath());
             continue;
           }
           alluxioUri = new AlluxioURI(
@@ -292,7 +295,7 @@ public class GlueDatabase implements UnderDatabase {
                   mUdbContext.getTableLocation(tableName).getPath(),
                   partitionName));
           // mount partition path if it is not already mounted as part of the table path mount
-          pathTranslator
+          mPathTranslator
               .addMapping(
                   UdbUtils.mountAlluxioPath(
                       tableName,
@@ -303,7 +306,6 @@ public class GlueDatabase implements UnderDatabase {
                   glueUfsUri);
         }
       }
-      return pathTranslator;
     } catch (AlluxioException e) {
       throw new IOException(
           "Failed to mount table location. tableName: " + tableName
@@ -341,7 +343,56 @@ public class GlueDatabase implements UnderDatabase {
   }
 
   @Override
-  public UdbTable getTable(String tableName, UdbBypassSpec bypassSpec) throws IOException {
+  public void mount(Set<String> tableNames, UdbInExClusionSpec bypassSpec) throws IOException {
+    if (mGlueConfiguration.getBoolean(Property.GROUP_MOUNT_POINTS)) {
+      LOG.debug("UDB group mount points enabled");
+      // Todo(bowen): group mount points for Glue tables
+      throw new UnimplementedException("Group mount is not implemented for Glue database");
+    }
+
+    for (String tableName : tableNames) {
+      Table table;
+      List<Partition> partitions;
+      try {
+        GetTableRequest tableRequest = new GetTableRequest()
+            .withCatalogId(mGlueConfiguration.get(Property.CATALOG_ID))
+            .withDatabaseName(mGlueDbName)
+            .withName(tableName);
+        table = getClient().getTable(tableRequest).getTable();
+
+        partitions = batchGetPartitions(getClient(), tableName);
+
+        mountAlluxioPaths(table, partitions, bypassSpec);
+      } catch (EntityNotFoundException e) {
+        throw new NotFoundException(
+            String.format("Table %s does not exist in Database: %s; Catalog ID: %s.",
+                tableName,
+                mGlueDbName,
+                mGlueConfiguration.get(Property.CATALOG_ID)
+            ), e);
+      } catch (ValidationException e) {
+        throw new IOException(
+            String.format("Failed to get table: %s in Database %s; "
+                    + "Catalog ID: %s with validation error: %s",
+                tableName,
+                mGlueDbName,
+                mGlueConfiguration.get(Property.CATALOG_ID),
+                e.getMessage()
+            ), e);
+      } catch (GlueEncryptionException e) {
+        throw new IOException(
+            String.format("Failed to get table: %s in Database: %s; Catalog ID: %s error: %s",
+                tableName,
+                mGlueDbName,
+                mGlueConfiguration.get(Property.CATALOG_ID),
+                e.getMessage()
+            ), e);
+      }
+    }
+  }
+
+  @Override
+  public UdbTable getTable(String tableName) throws IOException {
     Table table;
     List<Partition> partitions;
     try {
@@ -352,7 +403,6 @@ public class GlueDatabase implements UnderDatabase {
       table = getClient().getTable(tableRequest).getTable();
 
       partitions = batchGetPartitions(getClient(), tableName);
-      PathTranslator pathTranslator = mountAlluxioPaths(table, partitions, bypassSpec);
 
       List<Column> partitionColumns;
       if (table.getPartitionKeys() == null) {
@@ -406,7 +456,7 @@ public class GlueDatabase implements UnderDatabase {
           .setDbName(mGlueDbName)
           .setTableName(tableName)
           .addAllDataCols(GlueUtils.toProto(table.getStorageDescriptor().getColumns()))
-          .setStorage(GlueUtils.toProto(table.getStorageDescriptor(), pathTranslator))
+          .setStorage(GlueUtils.toProto(table.getStorageDescriptor(), mPathTranslator))
           .putAllParameters(tableParameters)
           .build();
 
@@ -421,7 +471,7 @@ public class GlueDatabase implements UnderDatabase {
             .setDbName(mGlueDbName)
             .setTableName(tableName)
             .addAllDataCols(GlueUtils.toProto(table.getStorageDescriptor().getColumns()))
-            .setStorage(GlueUtils.toProto(table.getStorageDescriptor(), pathTranslator))
+            .setStorage(GlueUtils.toProto(table.getStorageDescriptor(), mPathTranslator))
             .setPartitionName(tableName)
             .putAllParameters(tableParameters);
         udbPartitions.add(new GluePartition(
@@ -433,7 +483,7 @@ public class GlueDatabase implements UnderDatabase {
               .setDbName(mGlueDbName)
               .setTableName(tableName)
               .addAllDataCols(GlueUtils.toProto(partition.getStorageDescriptor().getColumns()))
-              .setStorage(GlueUtils.toProto(partition.getStorageDescriptor(), pathTranslator))
+              .setStorage(GlueUtils.toProto(partition.getStorageDescriptor(), mPathTranslator))
               .setPartitionName(partName)
               .putAllParameters(partition.getParameters() == null
                   ? Collections.emptyMap() : partition.getParameters());
@@ -446,7 +496,7 @@ public class GlueDatabase implements UnderDatabase {
       }
 
       return new GlueTable(this,
-          pathTranslator,
+          mPathTranslator,
           tableName,
           GlueUtils.toProtoSchema(table.getStorageDescriptor().getColumns()),
           columnStatisticsTableData,
