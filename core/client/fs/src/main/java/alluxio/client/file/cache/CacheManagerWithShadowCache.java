@@ -13,8 +13,7 @@ package alluxio.client.file.cache;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
-import alluxio.client.quota.CacheQuota;
-import alluxio.client.quota.CacheScope;
+import alluxio.client.file.CacheContext;
 import alluxio.conf.AlluxioConfiguration;
 import alluxio.conf.PropertyKey;
 import alluxio.metrics.MetricKey;
@@ -37,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
  * A wrapper class of CacheManager with shadow cache.
  */
 public class CacheManagerWithShadowCache implements CacheManager {
+
   private final CacheManager mCacheManager;
   private final int mNumBloomFilter;
   private final long mBloomFilterExpectedInsertions;
@@ -58,7 +58,7 @@ public class CacheManagerWithShadowCache implements CacheManager {
 
   /**
    * @param cacheManager the real cache manager
-   * @param conf the alluxio configuration
+   * @param conf         the alluxio configuration
    */
   public CacheManagerWithShadowCache(CacheManager cacheManager, AlluxioConfiguration conf) {
     mCacheManager = cacheManager;
@@ -108,12 +108,13 @@ public class CacheManagerWithShadowCache implements CacheManager {
   }
 
   @Override
-  public boolean put(PageId pageId, byte[] page, CacheScope cacheScope, CacheQuota cacheQuota) {
-    updateBloomFilterAndWorkingSet(pageId, page.length);
-    return mCacheManager.put(pageId, page, cacheScope, cacheQuota);
+  public boolean put(PageId pageId, byte[] page, CacheContext cacheContext) {
+    updateBloomFilterAndWorkingSet(pageId, page.length, cacheContext);
+    return mCacheManager.put(pageId, page, cacheContext);
   }
 
-  private void updateBloomFilterAndWorkingSet(PageId pageId, int pageLength) {
+  private void updateBloomFilterAndWorkingSet(PageId pageId, int pageLength,
+      CacheContext cacheContext) {
     int filterIndex = mCurrentSegmentFilterIndex;
     BloomFilter<PageId> bf = mSegmentBloomFilters.get(filterIndex);
     if (!bf.mightContain(pageId)) {
@@ -123,6 +124,10 @@ public class CacheManagerWithShadowCache implements CacheManager {
       mWorkingSetBloomFilter.put(pageId);
       updateFalsePositiveRatio();
       updateWorkingSetSize();
+      if (cacheContext != null) {
+        cacheContext
+            .incrementCounter(MetricKey.CLIENT_CACHE_SHADOW_CACHE_BYTES.getName(), pageLength);
+      }
     }
   }
 
@@ -215,7 +220,7 @@ public class CacheManagerWithShadowCache implements CacheManager {
 
   @Override
   public int get(PageId pageId, int pageOffset, int bytesToRead, byte[] buffer,
-      int offsetInBuffer) {
+      int offsetInBuffer, CacheContext cacheContext) {
     boolean seen = false;
     for (int i = 0; i < mSegmentBloomFilters.length(); ++i) {
       seen |= mSegmentBloomFilters.get(i).mightContain(pageId);
@@ -226,13 +231,13 @@ public class CacheManagerWithShadowCache implements CacheManager {
       mShadowCachePageHit.getAndIncrement();
       mShadowCacheByteHit.getAndAdd(bytesToRead);
     } else {
-      updateBloomFilterAndWorkingSet(pageId, bytesToRead);
+      updateBloomFilterAndWorkingSet(pageId, bytesToRead, cacheContext);
     }
     Metrics.SHADOW_CACHE_PAGES_READ.inc();
     Metrics.SHADOW_CACHE_BYTES_READ.inc(bytesToRead);
     mShadowCachePageRead.getAndIncrement();
     mShadowCacheByteRead.getAndAdd(bytesToRead);
-    return mCacheManager.get(pageId, pageOffset, bytesToRead, buffer, offsetInBuffer);
+    return mCacheManager.get(pageId, pageOffset, bytesToRead, buffer, offsetInBuffer, cacheContext);
   }
 
   @Override
@@ -266,6 +271,7 @@ public class CacheManagerWithShadowCache implements CacheManager {
   }
 
   private static final class Metrics {
+
     private static final Counter SHADOW_CACHE_BYTES_READ =
         MetricsSystem.counter(MetricKey.CLIENT_CACHE_SHADOW_CACHE_BYTES_READ.getName());
     private static final Counter SHADOW_CACHE_BYTES_HIT =
