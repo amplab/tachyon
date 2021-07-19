@@ -208,6 +208,11 @@ public class HiveDatabase implements UnderDatabase {
       throws IOException {
     final String tableName = table.getTableName();
     final String tableUfsPath = table.getSd().getLocation();
+    if (tableUfsPath == null) {
+      LOG.error(
+          "The location of table {} of database {} is null", tableName, mHiveDbName);
+      return;
+    }
     final AlluxioURI tableUfsUri = new AlluxioURI(tableUfsPath);
     final AlluxioURI rootUfsUri = new AlluxioURI(tableUfsUri, "/", false);
 
