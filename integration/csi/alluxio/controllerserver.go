@@ -15,6 +15,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"io"
+	"os/exec"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -47,12 +48,44 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	capacityBytes := int64(req.GetCapacityRange().GetRequiredBytes())
 
+	params := req.GetParameters()
+	pathType, exist := params["pathType"]
+	if !exist {
+		pathType = "Directory"
+	}
+	alluxioPath, exist := params["alluxioPath"]
+	if !exist {
+		return nil, status.Error(codes.InvalidArgument, "alluxioPath missing in paramters")
+	}
+
+	switch pathType {
+	case "DirectoryOrCreate":
+		glog.V(4).Infof("Create directory %s", alluxioPath)
+		command := exec.Command("/opt/alluxio/bin/alluxio", "fs", "mkdir", alluxioPath)
+		stdoutStderr, err := command.CombinedOutput()
+		if err != nil {
+			glog.V(2).Infof("Failed to create directory, stdout/stderr is: %s, error is %v", string(stdoutStderr), err)
+			return nil, status.Error(codes.Aborted, "Failed to create directory")
+		}
+		glog.V(4).Infof("Command stdout/stderr is: %s", string(stdoutStderr))
+	case "Directory":
+		glog.V(4).Infof("Test if directory %s exists", alluxioPath)
+		command := exec.Command("/opt/alluxio/bin/alluxio", "fs", "test", "-d", alluxioPath)
+		stdoutStderr, err := command.CombinedOutput()
+		if err != nil {
+			glog.V(2).Infof("Path %s does not exist or is not a directory, stdout/stderr is: %s, error is %v",
+				alluxioPath, string(stdoutStderr), err)
+			return nil, status.Error(codes.Aborted, "AlluxioPath does not exists or is not a directory")
+		}
+		glog.V(4).Infof("Command stdout/stderr is: %s", string(stdoutStderr))
+	}
+
 	glog.V(4).Infof("Creating volume %s", volumeID)
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
 			VolumeId:      volumeID,
 			CapacityBytes: capacityBytes,
-			VolumeContext: req.GetParameters(),
+			VolumeContext: params,
 		},
 	}, nil
 }
