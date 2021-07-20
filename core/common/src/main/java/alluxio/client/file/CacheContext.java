@@ -24,6 +24,9 @@ import javax.annotation.Nullable;
  * Cache related context.
  */
 public class CacheContext {
+
+  public static final CacheContext DEFAULT_CACHE_CONTEXT = new CacheContext();
+
   /** Used in Prestodb to indicate the cache quota for a file. */
   private CacheQuota mCacheQuota = CacheQuota.UNLIMITED;
   /** Used in Prestodb to indicate the cache scope. */
