@@ -882,6 +882,12 @@ public final class MetricKey implements Comparable<MetricKey> {
           .setMetricType(MetricType.COUNTER)
           .setIsClusterAggregated(false)
           .build();
+  public static final MetricKey WORKER_ASYNC_CACHE_BLOCKS_SIZE =
+      new Builder("Worker.AsyncCacheBlocksSize")
+          .setDescription("Total number of bytes that being cached through async cache requests")
+          .setMetricType(MetricType.COUNTER)
+          .setIsClusterAggregated(false)
+          .build();
   public static final MetricKey WORKER_BLOCKS_ACCESSED =
       new Builder("Worker.BlocksAccessed")
           .setDescription("Total number of times any one of the blocks in this worker is accessed.")
@@ -1085,6 +1091,42 @@ public final class MetricKey implements Comparable<MetricKey> {
       new Builder("Worker.CapacityFree")
           .setDescription("Total free bytes on all tiers of a specific Alluxio worker")
           .setMetricType(MetricType.GAUGE)
+          .setIsClusterAggregated(false)
+          .build();
+  public static final MetricKey WORKER_CACHE_FAILED_BLOCKS =
+      new Builder("Worker.CacheFailedBlocks")
+          .setDescription("Total number of async cache blocks in this worker")
+          .setMetricType(MetricType.COUNTER)
+          .setIsClusterAggregated(false)
+          .build();
+  public static final MetricKey WORKER_CACHE_REMOTE_BLOCKS =
+      new Builder("Worker.CacheRemoteBlocks")
+          .setDescription("Total number of blocks that need to be cached from remote source")
+          .setMetricType(MetricType.COUNTER)
+          .setIsClusterAggregated(false)
+          .build();
+  public static final MetricKey WORKER_CACHE_REQUESTS =
+      new Builder("Worker.CacheRequests")
+          .setDescription("Total number of cache request received by this worker")
+          .setMetricType(MetricType.COUNTER)
+          .setIsClusterAggregated(false)
+          .build();
+  public static final MetricKey WORKER_CACHE_SUCCEEDED_BLOCKS =
+      new Builder("Worker.CacheSucceededBlocks")
+          .setDescription("Total number of cache succeeded blocks in this worker")
+          .setMetricType(MetricType.COUNTER)
+          .setIsClusterAggregated(false)
+          .build();
+  public static final MetricKey WORKER_CACHE_UFS_BLOCKS =
+      new Builder("Worker.CacheUfsBlocks")
+          .setDescription("Total number of blocks that need to be cached from local source")
+          .setMetricType(MetricType.COUNTER)
+          .setIsClusterAggregated(false)
+          .build();
+  public static final MetricKey WORKER_CACHE_BLOCKS_SIZE =
+      new Builder("Worker.CacheBlocksSize")
+          .setDescription("Total number of bytes that being cached through cache requests")
+          .setMetricType(MetricType.COUNTER)
           .setIsClusterAggregated(false)
           .build();
   public static final MetricKey WORKER_BLOCK_REMOVER_TRY_REMOVE_COUNT =
