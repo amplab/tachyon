@@ -841,28 +841,32 @@ public final class MetricsSystem {
     }
   }
 
+  /**
+   * A timer context with multiple timers.
+   */
   public static class MultiTimerContext implements AutoCloseable {
-    private final Timer mTimer1;
-    private final Timer mTimer2;
+    private final Timer[] mTimers;
     private final long mStartTime;
 
-    public MultiTimerContext(Timer timer1, Timer timer2) {
-      mTimer1 = Preconditions.checkNotNull(timer1, "timer1");
-      mTimer2 = Preconditions.checkNotNull(timer2, "timer2");
+    /**
+     * @param timers timers associated with this context
+     */
+    public MultiTimerContext(Timer... timers) {
+      mTimers = timers;
       mStartTime = System.nanoTime();
     }
 
     /**
      * Updates the timer with the difference between current and start time. Call to this method
-     * will
-     * not reset the start time. Multiple calls result in multiple updates.
+     * will not reset the start time. Multiple calls result in multiple updates.
      *
      * @return the elapsed time in nanoseconds
      */
     public long stop() {
       final long elapsed = System.nanoTime() - mStartTime;
-      mTimer1.update(elapsed, TimeUnit.NANOSECONDS);
-      mTimer2.update(elapsed, TimeUnit.NANOSECONDS);
+      for (Timer timer : mTimers) {
+        timer.update(elapsed, TimeUnit.NANOSECONDS);
+      }
       return elapsed;
     }
 
